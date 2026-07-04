@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from .openai_adapter import OpenAIAdapter
 
-DEFAULT_BASE_URL = "http://localhost:11434/v1"  # Ollama's OpenAI-compatible endpoint
+DEFAULT_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_MODEL = "llama3.2"
 
 

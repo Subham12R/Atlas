@@ -26,7 +26,7 @@ function ContinueButton({
       onClick={onClick}
       disabled={disabled}
       title={label}
-      className="w-12 h-12 shrink-0 rounded-full bg-[#2E2E2D] dark:bg-[#EAE8E3] flex items-center justify-center text-white dark:text-[#1A1A19] hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+      className="w-12 h-12 shrink-0 rounded-full bg-[#2E2E2D] dark:bg-white flex items-center justify-center text-white dark:text-black hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
     >
       {busy ? (
         <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
@@ -77,18 +77,27 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
   const sceneRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
 
-  // Slow, staggered reveal of this scene's story text -- runs on mount and
-  // every time `step` changes. useLayoutEffect (not useEffect) so the tween
-  // starts from opacity 0 before the browser paints the new text, avoiding a
-  // one-frame flash at full opacity.
+  // Staggered reveal per step. Reset the scene container first — transitionOut
+  // fades the whole scene to opacity 0 and that inline style persists otherwise.
   useLayoutEffect(() => {
-    if (!sceneRef.current) return
-    const lines = sceneRef.current.querySelectorAll('[data-gsap-line]')
-    gsap.fromTo(
-      lines,
-      { opacity: 0, y: 34 },
-      { opacity: 1, y: 0, duration: 1.15, ease: 'power3.out', stagger: 0.18 }
-    )
+    const scene = sceneRef.current
+    if (!scene) return
+
+    gsap.killTweensOf(scene)
+    gsap.set(scene, { opacity: 1, y: 0 })
+
+    const lines = scene.querySelectorAll('[data-gsap-line]')
+    if (lines.length === 0) return
+
+    gsap.killTweensOf(lines)
+    gsap.set(lines, { opacity: 0, y: 34 })
+    gsap.to(lines, {
+      opacity: 1,
+      y: 0,
+      duration: 1.15,
+      ease: 'power3.out',
+      stagger: 0.18
+    })
   }, [step])
 
   const handleAvatarClick = (): void => {
@@ -107,16 +116,19 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
     e.target.value = ''
   }
 
-  /** Fades the current scene's text out before the step advances, so the
-   * next scene's story text always enters fresh rather than jump-cutting. */
+  /** Fades the current scene's lines out before the step advances. */
   const transitionOut = (): Promise<void> => {
-    if (!sceneRef.current) return Promise.resolve()
+    const scene = sceneRef.current
+    if (!scene) return Promise.resolve()
+    const lines = scene.querySelectorAll('[data-gsap-line]')
+    if (lines.length === 0) return Promise.resolve()
     return new Promise((resolve) => {
-      gsap.to(sceneRef.current, {
+      gsap.to(lines, {
         opacity: 0,
         y: -18,
         duration: 0.35,
         ease: 'power2.in',
+        stagger: 0.06,
         onComplete: resolve
       })
     })
@@ -197,11 +209,21 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
       ref={overlayRef}
       className={cn(
         'fixed inset-0 z-50 flex flex-col select-none overflow-hidden',
-        // Full opacity -- a solid backdrop, not a translucent/blurred panel.
-        'bg-[#ffffff] dark:bg-[#161616]',
+        'bg-[#FAF9F6] dark:bg-[#1E1E1C]',
         isExiting && 'pointer-events-none'
       )}
     >
+      {/* Bottom radial glow — fades to transparent over the titlebar-matched base */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        aria-hidden
+        style={{
+          background:
+            'radial-gradient(ellipse 120% 70% at 50% 100%, rgba(186, 230, 253, 0.7) 0%, rgba(56, 189, 248, 0.45) 18%, rgba(14, 165, 233, 0.2) 38%, transparent 62%)'
+        }}
+      />
+
+      <div className="relative z-10 flex flex-col flex-1 min-h-0">
       {/* Progress -- minimal dots, top center */}
       <div className="flex items-center gap-1.5 justify-center pt-10 shrink-0">
         {Array.from({ length: TOTAL_STEPS }, (_, i) => i + 1).map((s) => (
@@ -210,10 +232,10 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
             className={cn(
               'h-1 rounded-full transition-all duration-300',
               s === step
-                ? 'w-6 bg-[#2E2E2D] dark:bg-[#EAE8E3]'
+                ? 'w-6 bg-[#2E2E2D] dark:bg-white'
                 : s < step
-                  ? 'w-1.5 bg-[#2E2E2D]/40 dark:bg-[#EAE8E3]/40'
-                  : 'w-1.5 bg-[#E5E3DF] dark:bg-[#2C2C2A]'
+                  ? 'w-1.5 bg-[#2E2E2D]/40 dark:bg-white/40'
+                  : 'w-1.5 bg-[#2E2E2D]/15 dark:bg-white/15'
             )}
           />
         ))}
@@ -228,13 +250,13 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
           <>
             <h1
               data-gsap-line
-              className="text-4xl md:text-8xl font-serif font-medium tracking-tighter text-[#2E2E2D] dark:text-[#ffffff]"
+              className="text-4xl md:text-8xl font-serif font-medium tracking-tighter text-[#2E2E2D] dark:text-white"
             >
               Welcome to Atlas.
             </h1>
             <p
               data-gsap-line
-              className="font-serif tracking-tighter md:text-xl text-[#6E6D6A] dark:text-[#adadad] max-w-4xl"
+              className="font-serif tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 max-w-4xl"
             >
               One platform to work hassle free - Research, Document, Chat, Anything you wanna do..
               <span className="italic ml-1">No interruptions.</span>
@@ -246,13 +268,13 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
           <>
             <h1
               data-gsap-line
-              className="text-3xl md:text-5xl font-medium font-serif tracking-tighter text-[#2E2E2D] dark:text-[#ffffff]"
+              className="text-3xl md:text-5xl font-medium font-serif tracking-tighter text-[#2E2E2D] dark:text-white"
             >
               What should we call you?
             </h1>
             <p
               data-gsap-line
-              className="font-serif tracking-tighter md:text-xl text-[#6E6D6A] dark:text-[#adadad] max-w-4xl"
+              className="font-serif tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 max-w-4xl"
             >
               Choose a display name and select an optional profile picture to personalize your
               workspace.
@@ -264,13 +286,13 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
           <>
             <h1
               data-gsap-line
-              className="text-3xl md:text-5xl font-medium font-serif tracking-tighter text-[#2E2E2D] dark:text-[#ffffff]"
+              className="text-3xl md:text-5xl font-medium font-serif tracking-tighter text-[#2E2E2D] dark:text-white"
             >
               Create your account
             </h1>
             <p
               data-gsap-line
-              className="font-serif tracking-tighter md:text-xl text-[#6E6D6A] dark:text-[#adadad] max-w-4xl"
+              className="font-serif tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 max-w-4xl"
             >
               Sign up with an email address and password. Passwords are securely hashed with bcrypt.
             </p>
@@ -295,7 +317,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
               <button
                 onClick={handleAvatarClick}
                 title="Optional profile photo"
-                className="w-14 h-12 rounded-full bg-[#F1EFEA] dark:bg-[#2C2C2A] border border-[#E5E3DF] dark:border-[#2C2C2A] flex items-center justify-center overflow-hidden cursor-pointer hover:border-[#2E2E2D] dark:hover:border-[#EAE8E3] transition-colors"
+                className="w-14 h-12 rounded-full bg-black/5 dark:bg-white/10 border border-black/10 dark:border-white/20 flex items-center justify-center overflow-hidden cursor-pointer hover:border-black/25 dark:hover:border-white/40 transition-colors backdrop-blur-sm"
               >
                 {avatarDataUrl ? (
                   <img src={avatarDataUrl} alt="Avatar" className="w-full h-full object-contain" />
@@ -305,7 +327,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="2"
-                    className="w-6 h-6 text-[#6E6D6A] dark:text-[#9E9D9A]"
+                    className="w-6 h-6 text-[#6E6D6A] dark:text-white/50"
                   >
                     <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
                     <circle cx="12" cy="7" r="4" />
@@ -318,7 +340,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={handleEnterKey}
                 placeholder="Your name"
-                className="w-full h-12 rounded-3xl px-5 text-left text-base bg-[#F1EFEA] dark:bg-[#2C2C2A]/20 backdrop-blur-2xl border border-[#E5E3DF] dark:border-[#2C2C2A] text-[#2E2E2D] dark:text-[#cfcfcf] placeholder:text-[#9E9D9A] outline-none focus:border-[#2E2E2D] dark:focus:border-[#EAE8E3] transition-colors"
+                className="w-full h-12 rounded-3xl px-5 text-left text-base bg-black/5 dark:bg-white/10 backdrop-blur-2xl border border-black/10 dark:border-white/20 text-[#2E2E2D] dark:text-white placeholder:text-[#9E9D9A] dark:placeholder:text-white/40 outline-none focus:border-[#2E2E2D]/40 dark:focus:border-white/50 transition-colors"
               />
               <ContinueButton
                 onClick={handleNext}
@@ -341,7 +363,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
               }}
               onKeyDown={handleEnterKey}
               placeholder="Email address"
-              className="w-full h-12 rounded-3xl px-5 text-left text-base bg-[#F1EFEA] dark:bg-[#2C2C2A]/20 backdrop-blur-2xl border border-[#E5E3DF] dark:border-[#2C2C2A] text-[#2E2E2D] dark:text-[#cfcfcf] placeholder:text-[#9E9D9A] outline-none focus:border-[#2E2E2D] dark:focus:border-[#EAE8E3] transition-colors"
+              className="w-full h-12 rounded-3xl px-5 text-left text-base bg-black/5 dark:bg-white/10 backdrop-blur-2xl border border-black/10 dark:border-white/20 text-[#2E2E2D] dark:text-white placeholder:text-[#9E9D9A] dark:placeholder:text-white/40 outline-none focus:border-[#2E2E2D]/40 dark:focus:border-white/50 transition-colors"
             />
             <input
               type="password"
@@ -352,7 +374,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
               }}
               onKeyDown={handleEnterKey}
               placeholder="Password"
-              className="w-full h-12 rounded-3xl px-5 text-left text-base bg-[#F1EFEA] dark:bg-[#2C2C2A]/20 backdrop-blur-2xl border border-[#E5E3DF] dark:border-[#2C2C2A] text-[#2E2E2D] dark:text-[#cfcfcf] placeholder:text-[#9E9D9A] outline-none focus:border-[#2E2E2D] dark:focus:border-[#EAE8E3] transition-colors"
+              className="w-full h-12 rounded-3xl px-5 text-left text-base bg-black/5 dark:bg-white/10 backdrop-blur-2xl border border-black/10 dark:border-white/20 text-[#2E2E2D] dark:text-white placeholder:text-[#9E9D9A] dark:placeholder:text-white/40 outline-none focus:border-[#2E2E2D]/40 dark:focus:border-white/50 transition-colors"
             />
             <input
               type="password"
@@ -363,17 +385,17 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
               }}
               onKeyDown={handleEnterKey}
               placeholder="Confirm password"
-              className="w-full h-12 rounded-3xl px-5 text-left text-base bg-[#F1EFEA] dark:bg-[#2C2C2A]/20 backdrop-blur-2xl border border-[#E5E3DF] dark:border-[#2C2C2A] text-[#2E2E2D] dark:text-[#cfcfcf] placeholder:text-[#9E9D9A] outline-none focus:border-[#2E2E2D] dark:focus:border-[#EAE8E3] transition-colors"
+              className="w-full h-12 rounded-3xl px-5 text-left text-base bg-black/5 dark:bg-white/10 backdrop-blur-2xl border border-black/10 dark:border-white/20 text-[#2E2E2D] dark:text-white placeholder:text-[#9E9D9A] dark:placeholder:text-white/40 outline-none focus:border-[#2E2E2D]/40 dark:focus:border-white/50 transition-colors"
             />
             {error && (
-              <p className="text-xs text-[#E0533C] dark:text-[#F87171] self-start px-2 font-medium">
+              <p className="text-xs text-[#E0533C] dark:text-red-400 self-start px-2 font-medium">
                 {error}
               </p>
             )}
             <button
               onClick={handleNext}
               disabled={!email.trim() || !password || !confirmPassword || saving}
-              className="w-full h-12 rounded-3xl bg-[#2E2E2D] dark:bg-[#EAE8E3] flex items-center justify-center gap-2 text-white dark:text-[#1A1A19] text-base font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              className="w-full h-12 rounded-3xl bg-[#2E2E2D] dark:bg-white flex items-center justify-center gap-2 text-white dark:text-black text-base font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             >
               {saving ? (
                 <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
@@ -414,11 +436,12 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
           <button
             onClick={handleBack}
             disabled={saving}
-            className="text-[11px] font-medium text-[#9E9D9A] dark:text-[#6E6D6A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3] transition-colors cursor-pointer disabled:opacity-40 mt-1"
+            className="text-[11px] font-medium text-[#9E9D9A] dark:text-white/40 hover:text-[#2E2E2D] dark:hover:text-white/80 transition-colors cursor-pointer disabled:opacity-40 mt-1"
           >
             Back
           </button>
         )}
+      </div>
       </div>
     </div>
   )

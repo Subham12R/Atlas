@@ -28,6 +28,7 @@ from pydantic import BaseModel
 import credentials_store
 import chat_store
 import imagegen
+import voice
 import websearch
 from adapters.base import ImageInput
 from factory import (ANON_OK, BRAIN_ENABLED, BRAIN_TOPK, IMAGE_GEN_MODELS,
@@ -35,12 +36,10 @@ from factory import (ANON_OK, BRAIN_ENABLED, BRAIN_TOPK, IMAGE_GEN_MODELS,
                      build_adapter, build_brain, get_embedder, get_store)
 
 TAVILY_KEY = "TAVILY_API_KEY"
+GROQ_KEY = "GROQ_API_KEY"
 
-# session_id -> (adapter, lock). In-memory only; lost on restart.
 SESSIONS: dict[str, tuple] = {}
 
-# provider -> env/credentials_store key holding its API key. "local" has no
-# key -- it's configured via base_url/model instead.
 PROVIDER_ENV_KEYS = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
@@ -62,8 +61,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Atlas API", version="1.0", lifespan=lifespan)
 
-# Permissive CORS for local dev so a browser frontend on another origin (e.g.
-# localhost:5173) can call the API. Lock allow_origins down for any real deploy.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -72,7 +69,6 @@ app.add_middleware(
 )
 
 
-# ---- request bodies -------------------------------------------------------
 class SessionCreate(BaseModel):
     provider: str
     anonymous: bool = False
@@ -80,7 +76,7 @@ class SessionCreate(BaseModel):
 
 
 class ImagePayload(BaseModel):
-    data: str  # base64, no "data:" prefix
+    data: str
     mime: str
 
 
@@ -100,7 +96,7 @@ class ChatOnce(BaseModel):
 class MemorySearch(BaseModel):
     q: str
     k: int = BRAIN_TOPK
-    graph: bool = True  # also expand into 1-hop graph facts
+    graph: bool = True
 
 
 class ImageGenerate(BaseModel):
@@ -118,13 +114,21 @@ class SearchSettingsUpdate(BaseModel):
     api_key: str
 
 
+class VoiceSettingsUpdate(BaseModel):
+    api_key: str
+
+
+class TranscribeRequest(BaseModel):
+    data: str
+    mime: str
+
+
 class ProviderSettingsUpdate(BaseModel):
-    api_key: str | None = None   # openai / anthropic / gemini / openrouter
-    base_url: str | None = None  # local only
-    model: str | None = None     # local only
+    api_key: str | None = None
+    base_url: str | None = None
+    model: str | None = None
 
 
-# ---- helpers --------------------------------------------------------------
 def _build(provider: str, anonymous: bool, model: str | None):
     """Validate + build a chat handle, mapping factory errors to HTTP codes.
 
@@ -163,7 +167,6 @@ def _images(payloads: list[ImagePayload] | None) -> list[ImageInput] | None:
     return [ImageInput(data=p.data, mime=p.mime) for p in payloads]
 
 
-# ---- endpoints ------------------------------------------------------------
 @app.get("/providers")
 async def list_providers():
     """Provider capabilities: anonymous support + suggested model slugs."""
@@ -171,7 +174,6 @@ async def list_providers():
             for p in PROVIDERS]
 
 
-# ---- provider settings (API keys + local LLM connection) -------------------
 @app.get("/settings/providers")
 async def get_provider_settings():
     """Per-provider: is an API key configured? Plus the current local-LLM
@@ -180,7 +182,7 @@ async def get_provider_settings():
     for p in PROVIDERS:
         if p == "local":
             out[p] = {
-                "configured": True,  # local never requires a key
+                "configured": True,
                 "base_url": credentials_store.get_value("LOCAL_LLM_BASE_URL"),
                 "model": credentials_store.get_value("LOCAL_LLM_MODEL"),
             }
@@ -237,7 +239,6 @@ async def clear_provider_settings(provider: str):
     return {"ok": True}
 
 
-# ---- web search (Tavily) ---------------------------------------------------
 @app.get("/settings/search")
 async def get_search_settings():
     return {"configured": bool(credentials_store.get_value(TAVILY_KEY))}
@@ -253,6 +254,36 @@ async def set_search_settings(body: SearchSettingsUpdate):
 async def clear_search_settings():
     credentials_store.delete(TAVILY_KEY)
     return {"ok": True}
+
+
+@app.get("/settings/voice")
+async def get_voice_settings():
+    return {"configured": bool(credentials_store.get_value(GROQ_KEY))}
+
+
+@app.put("/settings/voice")
+async def set_voice_settings(body: VoiceSettingsUpdate):
+    credentials_store.set_many({GROQ_KEY: body.api_key})
+    return {"ok": True}
+
+
+@app.delete("/settings/voice")
+async def clear_voice_settings():
+    credentials_store.delete(GROQ_KEY)
+    return {"ok": True}
+
+
+@app.post("/audio/transcribe")
+async def transcribe_audio(body: TranscribeRequest):
+    """Voice typing -- transcribes recorded mic audio via Groq's Whisper API."""
+    api_key = credentials_store.get_value(GROQ_KEY)
+    if not api_key:
+        raise HTTPException(400, "no Groq API key configured")
+    try:
+        text = await voice.transcribe(api_key, body.data, body.mime)
+    except Exception as e:
+        raise HTTPException(502, f"transcription failed: {e}")
+    return {"text": text}
 
 
 @app.post("/account/reset")
@@ -360,7 +391,6 @@ async def create_session(body: SessionCreate):
         raise HTTPException(502, f"init failed: {e}")
     sid = uuid.uuid4().hex
     SESSIONS[sid] = (adapter, asyncio.Lock())
-    # a Brain carries its thread_id; a plain adapter doesn't.
     return {"session_id": sid, "provider": body.provider,
             "thread_id": getattr(adapter, "thread_id", None)}
 
@@ -368,7 +398,7 @@ async def create_session(body: SessionCreate):
 @app.post("/sessions/{sid}/messages")
 async def send_message(sid: str, body: Message):
     adapter, lock = _get(sid)
-    async with lock:  # serialize -- one live session can't be hit concurrently
+    async with lock:
         try:
             reply = await adapter.send(body.prompt, _images(body.images))
         except Exception as e:
@@ -407,7 +437,6 @@ async def close_session(sid: str):
     return {"ok": True}
 
 
-# ---- memory inspection (only meaningful when BRAIN_ENABLED) ----------------
 @app.get("/memory/search")
 async def memory_search(q: str, k: int = BRAIN_TOPK):
     """Plain semantic search across ALL stored threads."""

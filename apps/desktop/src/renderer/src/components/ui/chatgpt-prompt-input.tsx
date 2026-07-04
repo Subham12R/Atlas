@@ -4,6 +4,7 @@ import * as PopoverPrimitive from '@radix-ui/react-popover'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Csv01Icon, File01Icon, SourceCodeIcon } from '@hugeicons/core-free-icons'
+import { ApiError, friendlyErrorMessage, transcribeAudio } from '@/lib/api'
 
 // --- Utility Function & Radix Primitives ---
 type ClassValue = string | number | boolean | null | undefined
@@ -424,8 +425,81 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
     const [selectedTool, setSelectedTool] = React.useState<string | null>(null)
     const [isPopoverOpen, setIsPopoverOpen] = React.useState(false)
     const [expandedImage, setExpandedImage] = React.useState<string | null>(null)
+    const [isRecording, setIsRecording] = React.useState(false)
+    const [isTranscribing, setIsTranscribing] = React.useState(false)
+    const [voiceError, setVoiceError] = React.useState<string | null>(null)
+    const mediaRecorderRef = React.useRef<MediaRecorder | null>(null)
+    const audioChunksRef = React.useRef<Blob[]>([])
+    const baseValueRef = React.useRef('')
 
     React.useImperativeHandle(ref, () => internalTextareaRef.current!, [])
+
+    React.useEffect(() => {
+      return () => {
+        mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop())
+      }
+    }, [])
+
+    const handleTranscription = async (blob: Blob): Promise<void> => {
+      setIsTranscribing(true)
+      try {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onloadend = () => resolve((reader.result as string).split(',')[1] || '')
+          reader.onerror = reject
+          reader.readAsDataURL(blob)
+        })
+        const mime = blob.type.split(';')[0] || 'audio/webm'
+        const { text } = await transcribeAudio(base64, mime)
+        if (text) {
+          const base = baseValueRef.current
+          const spacer = base && !base.endsWith(' ') ? ' ' : ''
+          setValue(base + spacer + text)
+        }
+      } catch (err) {
+        setVoiceError(
+          err instanceof ApiError && err.status === 400
+            ? 'Add a Groq API key in Profile > Advanced to enable voice typing.'
+            : friendlyErrorMessage(err, 'Voice typing failed. Please try again.')
+        )
+      } finally {
+        setIsTranscribing(false)
+      }
+    }
+
+    const handleMicClick = async (): Promise<void> => {
+      if (isRecording) {
+        mediaRecorderRef.current?.stop()
+        return
+      }
+
+      setVoiceError(null)
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      } catch {
+        setVoiceError('Microphone access was denied.')
+        return
+      }
+
+      baseValueRef.current = value
+      audioChunksRef.current = []
+
+      const recorder = new MediaRecorder(stream)
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop())
+        setIsRecording(false)
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+        if (blob.size > 0) handleTranscription(blob)
+      }
+
+      mediaRecorderRef.current = recorder
+      setIsRecording(true)
+      recorder.start()
+    }
 
     React.useLayoutEffect(() => {
       const textarea = internalTextareaRef.current
@@ -585,6 +659,10 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
           {...props}
         />
 
+        {voiceError && (
+          <p className="px-2 pt-1 text-xs text-red-500 dark:text-red-400">{voiceError}</p>
+        )}
+
         <div className="mt-0.5 p-1 pt-0">
           <TooltipProvider delayDuration={100}>
             <div className="flex items-center gap-2">
@@ -694,15 +772,29 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      disabled
-                      className="flex h-8 w-8 items-center justify-center rounded-full text-foreground dark:text-white opacity-40 cursor-not-allowed"
+                      onClick={handleMicClick}
+                      disabled={isTranscribing}
+                      className={cn(
+                        'flex h-8 w-8 items-center justify-center rounded-full transition-colors cursor-pointer disabled:cursor-wait',
+                        isRecording
+                          ? 'bg-red-500/15 text-red-500 animate-pulse'
+                          : isTranscribing
+                            ? 'text-foreground dark:text-white opacity-50'
+                            : 'text-foreground dark:text-white hover:bg-accent dark:hover:bg-[#515151]'
+                      )}
                     >
-                      <MicIcon className="h-4 w-4 text-neutral-500" />
-                      <span className="sr-only">Voice mode</span>
+                      <MicIcon className="h-4 w-4" />
+                      <span className="sr-only">Voice typing</span>
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="top" showArrow={true}>
-                    <p>Voice mode -- coming soon</p>
+                    <p>
+                      {isRecording
+                        ? 'Recording... click to stop'
+                        : isTranscribing
+                          ? 'Transcribing...'
+                          : 'Voice typing'}
+                    </p>
                   </TooltipContent>
                 </Tooltip>
 

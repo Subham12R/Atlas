@@ -34,7 +34,6 @@ class MemoryStore:
             "SELECT 1 FROM messages WHERE thread_id=? LIMIT 1", (thread_id,)).fetchone()
         return row is not None
 
-    # ---- messages + embedded chunks --------------------------------------
     def add_message(self, thread_id: str, role: str, content: str,
                     provider: str | None = None, meta: dict | None = None,
                     chunks: list[tuple] | None = None) -> int:
@@ -85,7 +84,6 @@ class MemoryStore:
 
         return [(r["text"], r["thread_id"], r["distance"]) for r in rows]
 
-    # ---- entity / relation graph -----------------------------------------
     def upsert_entity(self, name: str, type_: str, thread_id: str) -> int:
         self.con.execute(
             "INSERT INTO entities(name, type, thread_id) VALUES (?,?,?) "
@@ -141,7 +139,6 @@ class MemoryStore:
         return {"nodes": [dict(n) for n in nodes],
                 "edges": [dict(e) for e in edges]}
 
-    # ---- full reset --------------------------------------------------------
     def wipe_all(self) -> None:
         """Delete every row across all tables -- used by full account reset."""
         self.con.execute("DELETE FROM edges")

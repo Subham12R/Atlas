@@ -19,8 +19,6 @@ def build_context(store, embedder, prompt: str, thread_id: str,
         lines = "\n".join(f"- {text.strip()}" for text, _, _ in hits)
         parts.append("[Relevant memory]\n" + lines)
 
-    # Graph-aware: pull facts for entities named in the prompt AND in the
-    # semantically-recalled chunks, so vector recall feeds the graph lookup.
     names = _entities(store, prompt, hits)
     triples = store.neighbors(names) if names else []
     if triples:
@@ -34,4 +32,4 @@ def _entities(store, prompt: str, hits: list[tuple]) -> list[str]:
     names = store.entity_names_in(prompt)
     for text, _, _ in hits:
         names.extend(store.entity_names_in(text))
-    return list(dict.fromkeys(names))  # dedupe, preserve order
+    return list(dict.fromkeys(names))

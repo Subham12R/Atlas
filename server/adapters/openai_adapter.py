@@ -36,7 +36,7 @@ class OpenAIAdapter(BaseAdapter):
         self.debug = debug
 
     async def init(self) -> None:
-        pass  # SDK is stateless per request -- nothing to warm up
+        pass
 
     async def send(self, prompt: str, images: list[ImageInput] | None = None) -> Reply:
         self._messages.append({"role": "user", "content": _content(prompt, images)})

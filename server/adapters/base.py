@@ -16,8 +16,6 @@ class Reply:
     """A normalized response, identical shape across all providers."""
     text: str
     provider: str
-    # Provider-specific conversation handles (Gemini: c_/r_/rc_ ids, etc.).
-    # Kept opaque so the orchestrator can persist it without understanding it.
     meta: dict = field(default_factory=dict)
 
 
@@ -29,7 +27,6 @@ class ImageInput:
 
 
 class BaseAdapter(ABC):
-    #: short stable id, e.g. "gemini", "chatgpt", "claude"
     name: str = "base"
 
     @abstractmethod
@@ -50,7 +47,6 @@ class BaseAdapter(ABC):
     async def close(self) -> None:
         """Release resources (browser, http client, etc.)."""
 
-    # Optional niceties -- override if the provider supports them.
     async def new_chat(self) -> None:
         """Start a fresh conversation (drop context)."""
         raise NotImplementedError

@@ -21,7 +21,6 @@ def _flag(name: str, default: str = "1") -> bool:
     return os.getenv(name, default).strip() not in ("", "0", "false", "False")
 
 
-# ---- brain (memory core) config -------------------------------------------
 BRAIN_ENABLED = _flag("BRAIN_ENABLED", "1")
 BRAIN_DB_PATH = os.getenv("BRAIN_DB_PATH", "brain.db").strip()
 BRAIN_EMBED_MODEL = os.getenv("BRAIN_EMBED_MODEL", "BAAI/bge-small-en-v1.5").strip()
@@ -35,30 +34,20 @@ BRAIN_CHUNK_OVERLAP = int(os.getenv("BRAIN_CHUNK_OVERLAP", "100"))
 BRAIN_CHUNK_BREAKPOINT_TYPE = os.getenv("BRAIN_CHUNK_BREAKPOINT_TYPE", "percentile").strip()
 _bp_amount_raw = os.getenv("BRAIN_CHUNK_BREAKPOINT_AMOUNT", "").strip()
 BRAIN_CHUNK_BREAKPOINT_AMOUNT = float(_bp_amount_raw) if _bp_amount_raw else None
-# Cosine-distance cutoff for recall (0=identical, 2=opposite): chunks within
-# this distance are pulled in dynamically instead of always returning a fixed
-# BRAIN_TOPK count. Set BRAIN_MAX_DISTANCE=0 (or blank) to disable and fall
-# back to plain fixed-top-k recall.
 _max_dist_raw = os.getenv("BRAIN_MAX_DISTANCE", "0.6").strip()
 BRAIN_MAX_DISTANCE = float(_max_dist_raw) if _max_dist_raw else None
 
-# menu/order. None of these providers have an anonymous/logged-out mode --
-# all are either official-SDK-with-API-key, or a local server.
 PROVIDERS = ["openai", "anthropic", "gemini", "openrouter", "local"]
 ANON_OK: set[str] = set()
 
-# Suggested model slugs per provider. These drift; callers always allow a
-# custom slug + provider default.
 MODELS = {
     "openai": ["gpt-4o", "gpt-4o-mini", "o4-mini"],
     "anthropic": ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
     "gemini": ["gemini-2.5-pro", "gemini-2.5-flash"],
-    "openrouter": [],  # any OpenRouter model slug, e.g. "anthropic/claude-sonnet-4-5"
-    "local": [],       # whatever model you've pulled locally, e.g. "llama3.2"
+    "openrouter": [],
+    "local": [],
 }
 
-# Providers with a real standalone image-generation API (as opposed to just
-# vision *input*, which every chat adapter now supports). Anthropic has none.
 IMAGE_GEN_PROVIDERS = ["openai", "gemini"]
 IMAGE_GEN_MODELS = {
     "openai": "gpt-image-1",
@@ -71,9 +60,6 @@ class AuthMissing(RuntimeError):
 
 
 def _require(env: str) -> str:
-    # credentials_store always wins over .env -- .env only seeds the first
-    # bootstrap value; keys saved via the Advanced settings UI take effect
-    # immediately without a server restart.
     val = credentials_store.get_value(env)
     if not val or val.startswith("paste"):
         raise AuthMissing(f"{env} not set")
@@ -108,8 +94,6 @@ def build_adapter(pkey: str, anonymous: bool = False, model: str | None = None):
     raise ValueError(f"unknown provider {pkey!r}")
 
 
-# ---- brain wiring ---------------------------------------------------------
-# Store + embedder are process-wide singletons: one db handle, one loaded model.
 _store = None
 _embedder = None
 
@@ -145,7 +129,7 @@ def build_brain(pkey: str, anonymous: bool = False, model: str | None = None,
         try:
             summarizer = Summarizer(build_adapter(BRAIN_SUMMARIZER))
         except AuthMissing:
-            summarizer = None  # RAG-only fallback
+            summarizer = None
 
     return Brain(adapter, get_store(), get_embedder(),
                  thread_id or uuid.uuid4().hex, pkey,

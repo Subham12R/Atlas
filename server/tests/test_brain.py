@@ -49,16 +49,12 @@ async def main():
                   summarizer=Summarizer(FakeAdapter()), auto_summary=True)
     await brain.init()
 
-    # Turn 1: state a fact.
     await brain.send("My project deadline is BAH 2026.")
 
-    # Turn 2: ask about it -> the fact should be recalled into the prompt the
-    # chat adapter actually receives (proves injection).
     await brain.send("when is my deadline?")
     injected = "BAH 2026" in chat.last_prompt
     print("recall injected prior fact into prompt:", injected)
 
-    # Persistence checks.
     n_msgs = store.con.execute("SELECT count(*) c FROM messages").fetchone()["c"]
     summary = store.get_summary("t1")
     graph = store.graph("t1")
@@ -66,7 +62,6 @@ async def main():
     print("rolling summary:", repr(summary))
     print("graph nodes/edges:", len(graph["nodes"]), "/", len(graph["edges"]))
 
-    # Chunking: a long reply must produce multiple chunk rows for one message.
     from brain.chunking import chunk_text
     long_text = ("Section one about apples. " * 40) + ("Section two about zebras. " * 40)
     pieces = chunk_text(long_text, embedder, 800, 100)

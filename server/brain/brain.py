@@ -40,17 +40,13 @@ class Brain:
         if self.summarizer is not None:
             try:
                 await self.summarizer.adapter.init()
-            except Exception as e:  # noqa: BLE001
-                # Summarizer is best-effort (see _enrich) -- a broken summarizer
-                # provider (e.g. stale Gemini cookies) must not break the actual
-                # chat provider the user picked. Degrade to RAG-only.
+            except Exception as e:
                 if DEBUG:
                     print(f"[brain] summarizer init failed, degrading to RAG-only: {e}")
                 self.summarizer = None
                 self.auto_summary = False
 
     async def send(self, prompt: str, images=None):
-        # ---- recall ------------------------------------------------------
         context = build_context(self.store, self.embedder, prompt,
                                 self.thread_id, self.topk, self.budget,
                                 self.max_distance)
@@ -58,23 +54,16 @@ class Brain:
         if DEBUG and context:
             print(f"[brain] injected {len(context)} chars of context")
 
-        # ---- delegate ------------------------------------------------------
-        # Images never touch chunk_text/the embedder below -- only the plain
-        # text prompt/reply are chunked and stored, so recall never has to
-        # deal with (or accidentally embed) raw image bytes.
         reply = await self.adapter.send(augmented, images)
 
-        # ---- persist (original prompt, not the augmented one) ------------
         self._store_turn("user", prompt)
         self._store_turn("assistant", reply.text, meta=reply.meta)
 
-        # ---- enrich (best-effort; never break the chat) ------------------
         if self.auto_summary:
             await self._enrich(prompt, reply.text)
         return reply
 
     async def send_stream(self, prompt: str, images=None):
-        # ---- recall ------------------------------------------------------
         t0 = time.monotonic()
         context = build_context(self.store, self.embedder, prompt,
                                 self.thread_id, self.topk, self.budget,
@@ -84,7 +73,6 @@ class Brain:
                   f"{f' ({len(context)} chars)' if context else ''}")
         augmented = f"{context}\n\n{prompt}" if context else prompt
 
-        # ---- delegate ------------------------------------------------------
         text_chunks = []
         t1 = time.monotonic()
         first_chunk = True
@@ -97,11 +85,9 @@ class Brain:
 
         full_text = "".join(text_chunks)
 
-        # ---- persist (original prompt, not the augmented one) ------------
         self._store_turn("user", prompt)
         self._store_turn("assistant", full_text)
 
-        # ---- enrich (best-effort; never break the chat) ------------------
         if self.auto_summary:
             await self._enrich(prompt, full_text)
 
@@ -122,7 +108,7 @@ class Brain:
                 sid = self.store.upsert_entity(s, "", self.thread_id)
                 did = self.store.upsert_entity(d, "", self.thread_id)
                 self.store.add_edge(sid, did, r, self.thread_id)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             if DEBUG:
                 print(f"[brain] enrich failed (kept chat alive): {e}")
 
@@ -131,7 +117,6 @@ class Brain:
         self.thread_id = uuid.uuid4().hex
         self.store.create_thread(self.thread_id, self.provider)
 
-    # BaseAdapter-compatible alias so `/new` in the CLI works unchanged.
     async def new_chat(self) -> None:
         await self.new_thread()
 

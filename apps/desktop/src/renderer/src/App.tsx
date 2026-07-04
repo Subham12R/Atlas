@@ -32,7 +32,11 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     const handleProfileUpdate = (): void => {
-      window.api.getProfile().then(setProfile)
+      window.api.getProfile().then((p) => {
+        setProfile(p)
+        // Empty profile → onboarding (e.g. after account deletion).
+        if (!p.name) setLocked(false)
+      })
     }
     window.addEventListener('profile:updated', handleProfileUpdate)
     return () => window.removeEventListener('profile:updated', handleProfileUpdate)

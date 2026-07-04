@@ -17,7 +17,6 @@ def _connect() -> sqlite3.Connection:
         _conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
         _conn.execute("PRAGMA foreign_keys = ON;")
         
-        # Create chats table
         _conn.execute(
             "CREATE TABLE IF NOT EXISTS chats ("
             "  id TEXT PRIMARY KEY,"
@@ -30,7 +29,6 @@ def _connect() -> sqlite3.Connection:
             ")"
         )
         
-        # Create messages table
         _conn.execute(
             "CREATE TABLE IF NOT EXISTS messages ("
             "  id TEXT PRIMARY KEY,"
@@ -61,7 +59,6 @@ def get_chats() -> list[dict]:
     chats = []
     for row in cursor.fetchall():
         chat_id = row[0]
-        # Fetch messages for this chat
         msg_cursor = conn.cursor()
         msg_cursor.execute(
             "SELECT id, sender, content, timestamp, provider, latency_ms, is_new, tool, sources, attachments "
@@ -110,11 +107,9 @@ def get_chats() -> list[dict]:
 
 def save_chats(chats_data: list[dict]) -> None:
     conn = _connect()
-    # Delete existing chats (cascade deletes messages)
     conn.execute("DELETE FROM chats")
     
     for c in chats_data:
-        # Insert chat
         conn.execute(
             "INSERT INTO chats (id, title, is_pinned, timestamp, provider, session_id, thread_id) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -129,7 +124,6 @@ def save_chats(chats_data: list[dict]) -> None:
             )
         )
         
-        # Insert messages
         for m in c.get("messages", []):
             sources_json = json.dumps(m.get("sources")) if m.get("sources") is not None else None
             attachments_json = json.dumps(m.get("attachments")) if m.get("attachments") is not None else None

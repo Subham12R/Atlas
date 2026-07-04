@@ -47,7 +47,7 @@ class GeminiAdapter(BaseAdapter):
                 yield text
 
     async def close(self) -> None:
-        pass  # no persistent connection to release
+        pass
 
     async def new_chat(self) -> None:
         self._chat = self._client.aio.chats.create(model=self.model)

@@ -15,11 +15,14 @@ import {
   ApiError,
   deleteProviderSettings,
   deleteSearchSettings,
+  deleteVoiceSettings,
   getProviderSettings,
   getSearchSettings,
+  getVoiceSettings,
   resetAccount,
   setProviderSettings,
   setSearchSettings,
+  setVoiceSettings,
   testProviderConnection,
   type ProviderSettingsMap
 } from '@/lib/api'
@@ -98,10 +101,50 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
   const [savingSearch, setSavingSearch] = useState(false)
   const [savedSearch, setSavedSearch] = useState(false)
 
+  const [voiceConfigured, setVoiceConfigured] = useState(false)
+  const [voiceKeyInput, setVoiceKeyInput] = useState('')
+  const [savingVoice, setSavingVoice] = useState(false)
+  const [savedVoice, setSavedVoice] = useState(false)
+
   const refreshSearchSettings = (): void => {
     getSearchSettings()
       .then((s) => setSearchConfigured(s.configured))
       .catch(() => {})
+  }
+
+  const refreshVoiceSettings = (): void => {
+    getVoiceSettings()
+      .then((s) => setVoiceConfigured(s.configured))
+      .catch(() => {})
+  }
+
+  const handleSaveVoiceKey = async (): Promise<void> => {
+    const apiKey = voiceKeyInput.trim()
+    if (!apiKey) return
+    setSavingVoice(true)
+    try {
+      await setVoiceSettings(apiKey)
+      refreshVoiceSettings()
+      setVoiceKeyInput('')
+      setSavedVoice(true)
+      setTimeout(() => setSavedVoice(false), 1500)
+    } catch {
+      // key save failed -- status pill simply stays "not configured"
+    } finally {
+      setSavingVoice(false)
+    }
+  }
+
+  const handleDisconnectVoice = async (): Promise<void> => {
+    setSavingVoice(true)
+    try {
+      await deleteVoiceSettings()
+      refreshVoiceSettings()
+    } catch {
+      // disconnect failed -- status pill simply stays "configured"
+    } finally {
+      setSavingVoice(false)
+    }
   }
 
   const handleSaveSearchKey = async (): Promise<void> => {
@@ -166,6 +209,7 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
   useEffect(() => {
     refreshProviderSettings()
     refreshSearchSettings()
+    refreshVoiceSettings()
   }, [])
 
   const handleSaveKey = async (providerId: string): Promise<void> => {
@@ -336,7 +380,8 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
     try {
       await resetAccount()
       await window.api.deleteAccount()
-      window.dispatchEvent(new Event('app:lock'))
+      onClose()
+      window.dispatchEvent(new Event('profile:updated'))
     } catch (err) {
       setDeleteError(
         err instanceof ApiError
@@ -786,6 +831,42 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                         className="h-9 px-3 rounded-lg bg-[#2E2E2D] dark:bg-[#EAE8E3] text-white dark:text-[#1A1A19] text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 shrink-0"
                       >
                         {savedSearch ? 'Saved' : 'Save'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-2 w-full">
+                  <h3 className="text-xs font-semibold text-[#2E2E2D] dark:text-[#EAE8E3]">
+                    Voice typing
+                  </h3>
+                  <p className="text-[11px] text-[#6E6D6A] dark:text-[#9E9D9A] leading-relaxed">
+                    Backs the mic button&apos;s dictation, via Groq&apos;s Whisper API. From{' '}
+                    <span className="font-medium">console.groq.com</span> -&gt; API Keys.
+                  </p>
+                  <div className="flex items-center gap-2 w-full">
+                    <input
+                      type="password"
+                      value={voiceKeyInput}
+                      onChange={(e) => setVoiceKeyInput(e.target.value)}
+                      placeholder={voiceConfigured ? 'Connected' : 'Paste Groq API key'}
+                      className="flex-1 min-w-0 h-9 rounded-lg px-3 bg-[#F1EFEA] dark:bg-[#2C2C2A] text-sm text-[#2E2E2D] dark:text-[#EAE8E3] outline-none placeholder:text-[#9E9D9A]"
+                    />
+                    {voiceConfigured ? (
+                      <button
+                        onClick={handleDisconnectVoice}
+                        disabled={savingVoice}
+                        className="h-9 px-3 rounded-lg text-xs font-semibold text-red-500 dark:text-[#F87171] hover:bg-red-50 dark:hover:bg-[#441C1A] transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+                      >
+                        {savingVoice ? 'Disconnecting...' : 'Disconnect'}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleSaveVoiceKey}
+                        disabled={savingVoice || !voiceKeyInput.trim()}
+                        className="h-9 px-3 rounded-lg bg-[#2E2E2D] dark:bg-[#EAE8E3] text-white dark:text-[#1A1A19] text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 shrink-0"
+                      >
+                        {savedVoice ? 'Saved' : 'Save'}
                       </button>
                     )}
                   </div>

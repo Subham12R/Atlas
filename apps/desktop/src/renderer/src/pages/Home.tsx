@@ -20,6 +20,7 @@ import {
   ApiError,
   closeSession,
   createSession,
+  friendlyErrorMessage,
   generateImage,
   sendMessageStream,
   webSearch,
@@ -382,8 +383,10 @@ function Home(): React.JSX.Element {
           )
         )
       } catch (err) {
-        const detail =
-          err instanceof ApiError ? err.message : 'Image generation failed. Is the server running?'
+        const detail = friendlyErrorMessage(
+          err,
+          'Image generation failed. Please try again in a moment.'
+        )
         const errorMsg: Message = {
           id: `msg-${Date.now()}-e`,
           sender: 'assistant',
@@ -558,10 +561,10 @@ function Home(): React.JSX.Element {
       // isSending, so there's nothing further to do here.
       if (err instanceof ApiAborted) return
 
-      const detail =
-        err instanceof ApiError
-          ? err.message
-          : 'Could not reach the model. Check that the Atlas server is running.'
+      const detail = friendlyErrorMessage(
+        err,
+        'Could not reach the model. Check that the Atlas server is running.'
+      )
       const errorText = `**Error:** ${detail}`
       const pendingId = assistantMsgId
 

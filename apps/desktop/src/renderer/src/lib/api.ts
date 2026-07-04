@@ -38,6 +38,18 @@ export class ApiError extends Error {
  * expected outcome rather than a real failure. */
 export class ApiAborted extends Error {}
 
+/** Turns a request failure into a short, user-safe message. 5xx ApiErrors
+ * wrap a raw upstream/provider exception string, which isn't fit to show
+ * as-is -- those fall back to `fallback` instead. Everything else (4xx
+ * ApiErrors are already written in plain English server-side) passes
+ * through unchanged. */
+export function friendlyErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    return err.status >= 500 ? fallback : err.message
+  }
+  return fallback
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let res: Response
   try {
@@ -255,5 +267,28 @@ export function webSearch(query: string, maxResults = 5): Promise<{ results: Sea
   return request('/websearch', {
     method: 'POST',
     body: JSON.stringify({ query, max_results: maxResults })
+  })
+}
+
+// ---- voice typing (Groq Whisper) ------------------------------------------
+export function getVoiceSettings(): Promise<{ configured: boolean }> {
+  return request('/settings/voice')
+}
+
+export function setVoiceSettings(apiKey: string): Promise<{ ok: boolean }> {
+  return request('/settings/voice', {
+    method: 'PUT',
+    body: JSON.stringify({ api_key: apiKey })
+  })
+}
+
+export function deleteVoiceSettings(): Promise<{ ok: boolean }> {
+  return request('/settings/voice', { method: 'DELETE' })
+}
+
+export function transcribeAudio(data: string, mime: string): Promise<{ text: string }> {
+  return request('/audio/transcribe', {
+    method: 'POST',
+    body: JSON.stringify({ data, mime })
   })
 }

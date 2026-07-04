@@ -9,5 +9,4 @@ See tests/README.md for what each one needs (.env vars, network).
 import os
 import sys
 
-# Belt-and-suspenders: ensure the project root is importable however this is run.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

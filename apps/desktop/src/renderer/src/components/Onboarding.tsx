@@ -209,7 +209,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
       ref={overlayRef}
       className={cn(
         'fixed inset-0 z-50 flex flex-col select-none overflow-hidden',
-        'bg-[#FAF9F6] dark:bg-[#1E1E1C]',
+        'bg-[#FAF9F6] dark:bg-[#171717]',
         isExiting && 'pointer-events-none'
       )}
     >
@@ -219,7 +219,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
         aria-hidden
         style={{
           background:
-            'radial-gradient(ellipse 120% 70% at 50% 100%, rgba(186, 230, 253, 0.7) 0%, rgba(56, 189, 248, 0.45) 18%, rgba(14, 165, 233, 0.2) 38%, transparent 62%)'
+            'radial-gradient(ellipse 100% 140% at 50% 100%, rgba(186, 230, 253, 0.6) 0%, rgba(56, 189, 248, 0.4) 10%, rgba(14, 165, 233, 0.2) 28%, transparent 44%)'
         }}
       />
 
@@ -250,13 +250,13 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
           <>
             <h1
               data-gsap-line
-              className="text-4xl md:text-8xl font-serif font-medium tracking-tighter text-[#2E2E2D] dark:text-white"
+              className="text-4xl md:text-8xl font-sans font-medium tracking-tighter text-[#2E2E2D] dark:text-white"
             >
               Welcome to Atlas.
             </h1>
             <p
               data-gsap-line
-              className="font-serif tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 max-w-4xl"
+              className="font-sans tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 max-w-4xl"
             >
               One platform to work hassle free - Research, Document, Chat, Anything you wanna do..
               <span className="italic ml-1">No interruptions.</span>
@@ -268,15 +268,15 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
           <>
             <h1
               data-gsap-line
-              className="text-3xl md:text-5xl font-medium font-serif tracking-tighter text-[#2E2E2D] dark:text-white"
+              className="text-3xl md:text-5xl font-medium font-sans tracking-tighter text-[#2E2E2D] dark:text-white"
             >
               What should we call you?
             </h1>
             <p
               data-gsap-line
-              className="font-serif tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 max-w-4xl"
+              className="font-sans tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 max-w-4xl"
             >
-              Choose a display name and select an optional profile picture to personalize your
+              Choose a User name and select an optional profile picture to personalize your
               workspace.
             </p>
           </>
@@ -286,15 +286,15 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
           <>
             <h1
               data-gsap-line
-              className="text-3xl md:text-5xl font-medium font-serif tracking-tighter text-[#2E2E2D] dark:text-white"
+              className="text-3xl md:text-5xl font-medium font-sans tracking-tighter text-[#2E2E2D] dark:text-white"
             >
               Create your account
             </h1>
             <p
               data-gsap-line
-              className="font-serif tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 max-w-4xl"
+              className="font-sans max-w-lg tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 "
             >
-              Sign up with an email address and password. Passwords are securely hashed with bcrypt.
+              Sign up with an email address and password.
             </p>
           </>
         )}

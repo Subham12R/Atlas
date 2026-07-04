@@ -740,9 +740,9 @@ export default function ChatArea({
   const selectedModelObj = MODELS.find((m) => m.id === effectiveModel) || MODELS[0]
 
   return (
-    <main className="flex-1 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#1E1E1C] relative overflow-hidden">
+    <main className="flex-1 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#171717] relative overflow-hidden">
       {/* Header */}
-      <header className="relative h-14 px-4  flex items-center justify-between shrink-0 bg-[#FAF9F6] dark:bg-[#1E1E1C] z-10">
+      <header className="relative h-14 px-4  flex items-center justify-between shrink-0 bg-[#FAF9F6] dark:bg-[#171717] z-10">
         <div className="flex items-center gap-3">
           {isSidebarCollapsed && (
             <button

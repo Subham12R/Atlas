@@ -104,7 +104,7 @@ export default function Sidebar({
   return (
     <aside
       className={cn(
-        'h-full flex flex-col bg-[#FAF9F6] dark:bg-[#1E1E1C] text-[#2E2E2D] dark:text-[#EAE8E3] select-none transition-all duration-300 ease-in-out relative z-10 shrink-0',
+        'h-full flex flex-col bg-[#FAF9F6] dark:bg-[#171717] text-[#2E2E2D] dark:text-[#EAE8E3] select-none transition-all duration-300 ease-in-out relative z-10 shrink-0',
         isCollapsed ? 'w-0 overflow-hidden opacity-0 pointer-events-none' : 'w-64'
       )}
     >

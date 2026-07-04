@@ -31,7 +31,7 @@ const TOPICS = [
 
 export default function Help({ onClose }: HelpProps): React.JSX.Element {
   return (
-    <main className="flex-1 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#1E1E1C] overflow-hidden">
+    <main className="flex-1 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#171717] overflow-hidden">
       <div className="shrink-0 px-6 md:px-10 pt-6 pb-4">
         <div className="max-w-xl mx-auto flex items-center justify-between">
           <h1 className="text-lg font-semibold tracking-tight text-[#2E2E2D] dark:text-[#EAE8E3]">

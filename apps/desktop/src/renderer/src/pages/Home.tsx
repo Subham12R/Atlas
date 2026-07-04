@@ -599,7 +599,7 @@ function Home(): React.JSX.Element {
   }
 
   return (
-    <div className="h-full w-full flex bg-[#FAF9F6] dark:bg-[#1E1E1C] overflow-hidden">
+    <div className="h-full w-full flex bg-[#FAF9F6] dark:bg-[#171717] overflow-hidden">
       <Sidebar
         isCollapsed={isSidebarCollapsed}
         setIsCollapsed={setIsSidebarCollapsed}

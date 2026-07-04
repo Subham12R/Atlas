@@ -393,7 +393,7 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
   }
 
   return (
-    <main className="flex-1 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#1E1E1C] overflow-hidden">
+    <main className="flex-1 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#171717] overflow-hidden">
       <div className="shrink-0 px-6 md:px-10 pt-6 pb-4">
         <div className="max-w-xl mx-auto flex items-center justify-between">
           <h1 className="text-lg font-semibold tracking-tight text-[#2E2E2D] dark:text-[#EAE8E3]">
@@ -534,7 +534,7 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                   className={cn(
                     'flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all cursor-pointer text-xs font-medium',
                     theme === 'light'
-                      ? 'bg-white dark:bg-[#1E1E1C] text-[#2E2E2D] dark:text-[#EAE8E3] shadow-sm'
+                      ? 'bg-white dark:bg-[#171717] text-[#2E2E2D] dark:text-[#EAE8E3] shadow-sm'
                       : 'text-[#6E6D6A] dark:text-[#9E9D9A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3]'
                   )}
                   title="Light"
@@ -547,7 +547,7 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                   className={cn(
                     'flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all cursor-pointer text-xs font-medium',
                     theme === 'dark'
-                      ? 'bg-white dark:bg-[#1E1E1C] text-[#2E2E2D] dark:text-[#EAE8E3] shadow-sm'
+                      ? 'bg-white dark:bg-[#171717] text-[#2E2E2D] dark:text-[#EAE8E3] shadow-sm'
                       : 'text-[#6E6D6A] dark:text-[#9E9D9A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3]'
                   )}
                   title="Dark"
@@ -560,7 +560,7 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                   className={cn(
                     'flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all cursor-pointer text-xs font-medium',
                     theme === 'system'
-                      ? 'bg-white dark:bg-[#1E1E1C] text-[#2E2E2D] dark:text-[#EAE8E3] shadow-sm'
+                      ? 'bg-white dark:bg-[#171717] text-[#2E2E2D] dark:text-[#EAE8E3] shadow-sm'
                       : 'text-[#6E6D6A] dark:text-[#9E9D9A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3]'
                   )}
                   title="System"

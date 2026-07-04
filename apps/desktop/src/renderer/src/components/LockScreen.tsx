@@ -72,7 +72,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps): React.JSX.Ele
   }
 
   return (
-    <div className="h-full w-full flex items-center justify-center bg-[#FAF9F6] dark:bg-[#1E1E1C] select-none">
+    <div className="h-full w-full flex items-center justify-center bg-[#FAF9F6] dark:bg-[#171717] select-none">
       <div className="w-full max-w-sm flex flex-col items-center gap-6 px-6">
         <div className="text-center space-y-1">
           <h1 className="text-2xl font-bold tracking-tight text-[#2E2E2D] dark:text-[#EAE8E3]">

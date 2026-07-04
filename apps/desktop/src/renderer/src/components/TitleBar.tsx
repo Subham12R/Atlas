@@ -15,7 +15,7 @@ export default function TitleBar(): React.JSX.Element {
 
   return (
     <div
-      className="h-10 w-full flex items-center justify-between px-4 pt-2 bg-[#FAF9F6] dark:bg-[#1E1E1C] b text-[#2E2E2D] dark:text-[#EAE8E3] select-none shrink-0"
+      className="h-10 w-full flex items-center justify-between px-4 pt-2 bg-[#FAF9F6] dark:bg-[#171717] b text-[#2E2E2D] dark:text-[#EAE8E3] select-none shrink-0"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       {/* Left side: Logo + Atlas title */}

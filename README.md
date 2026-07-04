@@ -1,6 +1,7 @@
 # Atlas
 
 A desktop AI assistant: an Electron chat UI backed by a Python FastAPI server that talks to OpenAI, Anthropic, Gemini, OpenRouter, and any local OpenAI-compatible model (e.g. Ollama) through their official SDKs — with a persistent memory layer (RAG + rolling summary + entity graph) underneath all of them.
+<img width="1200" height="676" alt="atlas" src="https://github.com/user-attachments/assets/b0b7b393-db53-4906-a222-0b7629a21460" />
 
 ---
 

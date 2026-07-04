@@ -42,7 +42,10 @@ locally.
 
 ## Status
 
-Personal-use project, actively evolving. Voice mode, a Serper-backed research
-mode, a plan mode, image generation, and structured document generation are
-sketched into the UI as disabled "coming soon" entries but not implemented
-yet.
+Open source, actively evolving. Voice mode, a Serper-backed research mode, a
+plan mode, image generation, and structured document generation are sketched
+into the UI as disabled "coming soon" entries but not implemented yet.
+
+## License
+
+MIT -- see [`LICENSE`](LICENSE).

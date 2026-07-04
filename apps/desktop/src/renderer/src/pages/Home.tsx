@@ -99,6 +99,15 @@ function buildSwitchContext(messages: Message[]): string {
   return `[Recent conversation before switching model]\n${lines.join('\n')}\n\n`
 }
 
+/** Baseline style rules applied to every request regardless of profile
+ * settings -- keeps replies free of stylistic tics that read as AI-generated. */
+function buildFormattingRules(): string {
+  return (
+    `[System Instruction - Formatting]\n` +
+    `Do not use em dashes (—) anywhere in your response. Do not use emojis.\n\n`
+  )
+}
+
 function buildPersonalizationContext(profile: UserProfile | null): string {
   if (!profile) return ''
 
@@ -431,6 +440,7 @@ function Home(): React.JSX.Element {
       }
 
       let promptToSend = applyAttachments(applyTool(content, resolvedTool), attachments)
+      promptToSend = buildFormattingRules() + promptToSend
       if (searchResults.length > 0) {
         promptToSend = buildSearchContext(searchResults) + promptToSend
       }

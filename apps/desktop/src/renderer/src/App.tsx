@@ -52,20 +52,17 @@ function App(): React.JSX.Element {
           <div className="flex-1 overflow-hidden relative flex flex-col">
             {locked === null || profile === null ? null : locked ? (
               <LockScreen onUnlock={() => setLocked(false)} />
-            ) : showOnboarding ? null : (
+            ) : showOnboarding ? (
+              <Onboarding
+                onComplete={(name, avatarUrl) => setProfile({ name, avatarDataUrl: avatarUrl })}
+              />
+            ) : (
               <Routes>
                 <Route path="/" element={<Home />} />
                 <Route path="/about" element={<About />} />
               </Routes>
             )}
           </div>
-          {/* Rendered as a full-window overlay, above the titlebar too --
-              onboarding isn't part of the normal boxed app layout. */}
-          {locked === false && profile !== null && showOnboarding && (
-            <Onboarding
-              onComplete={(name, avatarUrl) => setProfile({ name, avatarDataUrl: avatarUrl })}
-            />
-          )}
         </div>
       </HashRouter>
     </ThemeProvider>

@@ -38,14 +38,15 @@ export class ApiError extends Error {
  * expected outcome rather than a real failure. */
 export class ApiAborted extends Error {}
 
-/** Turns a request failure into a short, user-safe message. 5xx ApiErrors
- * wrap a raw upstream/provider exception string, which isn't fit to show
- * as-is -- those fall back to `fallback` instead. Everything else (4xx
- * ApiErrors are already written in plain English server-side) passes
- * through unchanged. */
+/** Turns a request failure into a short, user-safe message. The server
+ * already unwraps SDK exceptions down to their clean human-readable text
+ * (see _err_detail in api.py) -- e.g. "You exceeded your current quota" or
+ * "API key not valid" -- which is worth showing as-is. Only an empty or
+ * implausibly long message (a raw dump some exception slipped through
+ * unclean) falls back to `fallback` instead. */
 export function friendlyErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
-    return err.status >= 500 ? fallback : err.message
+    return err.message && err.message.length <= 300 ? err.message : fallback
   }
   return fallback
 }

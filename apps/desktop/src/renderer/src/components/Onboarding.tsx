@@ -60,7 +60,7 @@ function ContinueButton({
   )
 }
 
-/** Full-window overlay -- not nested in the app's normal boxed layout. Only
+/** Content-area overlay below the title bar — same slot as LockScreen. Only
  * asks for a name + optional avatar; app lock and theme are configured later
  * from Settings, not during onboarding. */
 export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.Element {
@@ -208,7 +208,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
     <div
       ref={overlayRef}
       className={cn(
-        'fixed inset-0 z-50 flex flex-col select-none overflow-hidden',
+        'absolute inset-0 flex flex-col select-none overflow-hidden',
         'bg-[#FAF9F6] dark:bg-[#171717]',
         isExiting && 'pointer-events-none'
       )}

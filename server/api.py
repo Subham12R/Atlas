@@ -167,6 +167,14 @@ def _images(payloads: list[ImagePayload] | None) -> list[ImageInput] | None:
     return [ImageInput(data=p.data, mime=p.mime) for p in payloads]
 
 
+def _err_detail(e: Exception) -> str:
+    """Some SDK exceptions (e.g. google-genai's ClientError) override __str__
+    with the full raw response dict; their `.message` attribute is the clean,
+    human-readable string underneath. Falls back to str(e) for exceptions
+    (OpenAI's, Anthropic's, plain network errors) that don't have one."""
+    return getattr(e, "message", None) or str(e)
+
+
 @app.get("/providers")
 async def list_providers():
     """Provider capabilities: anonymous support + suggested model slugs."""
@@ -282,7 +290,7 @@ async def transcribe_audio(body: TranscribeRequest):
     try:
         text = await voice.transcribe(api_key, body.data, body.mime)
     except Exception as e:
-        raise HTTPException(502, f"transcription failed: {e}")
+        raise HTTPException(502, f"transcription failed: {_err_detail(e)}")
     return {"text": text}
 
 
@@ -323,7 +331,7 @@ async def generate_image(body: ImageGenerate):
         else:
             images = await imagegen.generate_gemini_image(api_key, body.prompt, model)
     except Exception as e:
-        raise HTTPException(502, f"image generation failed: {e}")
+        raise HTTPException(502, f"image generation failed: {_err_detail(e)}")
     return {"images": images}
 
 
@@ -339,7 +347,7 @@ async def web_search(body: WebSearchRequest):
     try:
         results = await websearch.search(api_key, body.query, body.max_results)
     except Exception as e:
-        raise HTTPException(502, f"web search failed: {e}")
+        raise HTTPException(502, f"web search failed: {_err_detail(e)}")
     return {"results": results}
 
 
@@ -358,7 +366,7 @@ async def test_provider_connection(provider: str):
         await adapter.init()
         reply = await adapter.send("Say OK.")
     except Exception as e:
-        raise HTTPException(400, f"connection test failed: {e}")
+        raise HTTPException(400, f"connection test failed: {_err_detail(e)}")
     finally:
         await adapter.close()
     return {"ok": True, "reply": reply.text}
@@ -374,7 +382,7 @@ async def chat_once(body: ChatOnce):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(502, f"chat failed: {e}")
+        raise HTTPException(502, f"chat failed: {_err_detail(e)}")
     finally:
         await adapter.close()
     return _reply_dict(reply)
@@ -388,7 +396,7 @@ async def create_session(body: SessionCreate):
         await adapter.init()
     except Exception as e:
         await adapter.close()
-        raise HTTPException(502, f"init failed: {e}")
+        raise HTTPException(502, f"init failed: {_err_detail(e)}")
     sid = uuid.uuid4().hex
     SESSIONS[sid] = (adapter, asyncio.Lock())
     return {"session_id": sid, "provider": body.provider,
@@ -402,7 +410,7 @@ async def send_message(sid: str, body: Message):
         try:
             reply = await adapter.send(body.prompt, _images(body.images))
         except Exception as e:
-            raise HTTPException(502, f"send failed: {e}")
+            raise HTTPException(502, f"send failed: {_err_detail(e)}")
     return _reply_dict(reply)
 
 
@@ -416,7 +424,7 @@ async def send_message_stream(sid: str, body: Message):
                 async for token in adapter.send_stream(body.prompt, _images(body.images)):
                     yield f"data: {json.dumps({'text': token})}\n\n"
             except Exception as e:
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                yield f"data: {json.dumps({'error': _err_detail(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

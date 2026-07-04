@@ -9,6 +9,7 @@ A desktop AI assistant: an Electron chat UI backed by a Python FastAPI server th
 - [Overview](#overview)
 - [Features](#features)
 - [System architecture](#system-architecture)
+- [Feature flows](#feature-flows)
 - [Data & storage](#data--storage)
 - [The brain (persistent memory)](#the-brain-persistent-memory)
 - [Provider adapters](#provider-adapters)
@@ -48,6 +49,8 @@ Design goal: **nothing above the adapter layer knows or cares which LLM provider
 - **Vision input** — attach images to prompts (all chat adapters support image input)
 - **Image generation** — OpenAI (`gpt-image-1`) and Gemini (`imagen-4.0-generate-001`) via `POST /images/generate`
 - **Web search** — Tavily-backed real internet search, folded into prompts with source pins in the UI
+- **Research mode** — the same Tavily search cast over a wider net (more results, a "research thoroughly" prompt instruction) — not a separate multi-step agent
+- **Voice typing** — mic-button dictation: records audio in the renderer and transcribes it via Groq's `whisper-large-v3-turbo` API (see [Feature flows](#feature-flows))
 - **Persistent memory (the brain)** — semantic recall, rolling summaries, and a lightweight entity/relation graph injected into every turn
 - **Provider settings UI** — save API keys, test connections, configure local LLM base URL/model from Profile → Advanced
 - **Chat library** — pin, search, and manage conversation history (synced to server-side `chats.db`)
@@ -56,7 +59,7 @@ Design goal: **nothing above the adapter layer knows or cares which LLM provider
 
 ### Planned / stubbed in UI
 
-Voice mode, Serper-backed deep research, plan mode, and structured document generation appear in the UI as disabled "coming soon" entries but are not yet implemented.
+Plan mode and structured document generation appear in the UI as disabled "coming soon" entries but are not yet implemented.
 
 ---
 
@@ -93,7 +96,8 @@ Voice mode, Serper-backed deep research, plan mode, and structured document gene
 │         ├── credentials_store.py  → credentials.db                     │
 │         ├── chat_store.py         → chats.db                           │
 │         ├── imagegen.py           → OpenAI / Gemini image APIs         │
-│         └── websearch.py          → Tavily REST API                    │
+│         ├── websearch.py          → Tavily REST API (search + research)│
+│         └── voice.py              → Groq Whisper API (voice typing)    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -129,7 +133,120 @@ sequenceDiagram
 | **Adapters** | `server/adapters/` | Provider-specific SDK wrappers behind `BaseAdapter` |
 | **Credentials** | `server/credentials_store.py` | SQLite key/value for API keys and local LLM settings |
 | **Chat persistence** | `server/chat_store.py` | SQLite store for the desktop app's chat library |
+| **Web search / research** | `server/websearch.py` | Tavily REST API wrapper, shared by Search-web and Research mode |
+| **Voice typing** | `server/voice.py` | Groq Whisper (`whisper-large-v3-turbo`) transcription wrapper |
 | **Desktop client** | `apps/desktop/src/renderer/src/lib/api.ts` | Typed HTTP client for all backend endpoints |
+
+---
+
+## Feature flows
+
+How the four "smart" features — web search, research mode, the RAG memory layer, and voice typing — actually move data end to end. All four are triggered from the same `PromptBox` component (`apps/desktop/src/renderer/src/components/ui/chatgpt-prompt-input.tsx`) and orchestrated by `Home.tsx`; only the brain (RAG) runs on every turn regardless of tool.
+
+### 1. Web search (Tavily)
+
+Picking the **Search web** tool (or Atlas auto-detecting an image-generation intent does *not* apply here — this is the explicit tool picker) fetches real, current results before the model ever sees the prompt. Nothing about this touches the brain's vector store — search results are ephemeral context, folded into the prompt text for this one turn only.
+
+```mermaid
+sequenceDiagram
+    participant UI as PromptBox
+    participant Home as Home.tsx
+    participant API as api.py
+    participant WS as websearch.py
+    participant Tavily as Tavily REST API
+    participant Chat as /sessions/{id}/messages/stream
+
+    UI->>Home: submit prompt (tool = "searchWeb")
+    Home->>API: POST /websearch {query, max_results: 5}
+    API->>WS: search(api_key, query, 5)
+    WS->>Tavily: POST api.tavily.com/search
+    Tavily-->>WS: [{title, url, content}, ...]
+    WS-->>API: normalized results
+    API-->>Home: {results}
+    Home->>Home: buildSearchContext(results) →<br/>prepend "[Web search results]..." to prompt
+    Home->>Chat: augmented prompt (brain recall still applies)
+    Chat-->>UI: streamed reply
+    Home->>UI: render reply + SourceTrace/SourcePins (title/url per result)
+```
+
+Key files: `Home.tsx` (`buildSearchContext`, `IMAGE_INTENT_RE` is unrelated), `server/api.py` (`POST /websearch`), `server/websearch.py`, `ChatArea.tsx` (`SearchTrace`, `SourcePins` render the citations).
+
+### 2. Research mode (deep research)
+
+Research mode is **the same pipeline as web search**, not a separate agent — the codebase is explicit about this (see the comment above the call site in `Home.tsx`). Two things change:
+
+| | Search web | Research mode |
+|---|---|---|
+| `max_results` sent to Tavily | 5 | 8 |
+| Prompt instruction (`applyTool`) | *"Search the web for current, up-to-date information..."* | *"Do deep, thorough research covering multiple angles and sources..."* |
+| UI trace label | "Searched the web" | "Researched the web" |
+
+Everything downstream — folding results into the prompt, brain recall, streaming, source pins — is identical to the web search flow above. There is no multi-step planning, sub-query decomposition, or iterative crawling; "deep" here means a wider single Tavily call plus a prompt nudge for the model to synthesize more thoroughly.
+
+### 3. RAG / persistent memory (the brain)
+
+Unlike search and voice, **the brain runs on every chat turn** (when `BRAIN_ENABLED=1`), independent of which tool (if any) is selected. It wraps whichever provider adapter is active behind the same `BaseAdapter` interface, so nothing upstream needs to know memory exists.
+
+```mermaid
+sequenceDiagram
+    participant UI as Desktop UI
+    participant API as api.py
+    participant Brain as Brain (brain/brain.py)
+    participant Store as MemoryStore (brain.db)
+    participant Embed as Embedder (fastembed)
+    participant Adapter as Provider Adapter
+    participant Sum as Summarizer (separate LLM call)
+
+    UI->>API: POST /sessions/{id}/messages/stream
+    API->>Brain: send_stream(prompt)
+    Brain->>Embed: embed_one(prompt)
+    Brain->>Store: KNN search vec_chunks + get_summary + neighbors(entities)
+    Store-->>Brain: relevant chunks + rolling summary + graph facts
+    Brain->>Brain: assemble context block (char-budgeted)
+    Brain->>Adapter: send(context + prompt)
+    Adapter-->>UI: streamed tokens (SSE)
+    Brain->>Store: persist user + assistant turns (chunked + embedded)
+    Brain->>Sum: update_summary() + extract_triples() [best-effort]
+    Sum-->>Store: rolling summary + (subject, relation, object) triples
+```
+
+Notes specific to how this interacts with the other three features:
+- **Search/research results are never embedded into `brain.db`** — they're prepended to that turn's prompt only. What *does* land in memory is the assistant's synthesized reply (which incorporates the search findings), so those facts become recallable indirectly in later turns.
+- **Voice-typed text is just text** — once transcription fills the textarea, that message goes through the exact same recall → send → persist → enrich pipeline as anything typed by hand. The brain has no idea it originated from audio.
+- If the summarizer provider isn't configured, enrichment is skipped and the turn still gets recall + persistence (RAG-only degradation — see [The brain](#the-brain-persistent-memory)).
+
+Full detail on chunking, embeddings, and the entity graph: [The brain (persistent memory)](#the-brain-persistent-memory).
+
+### 4. Voice typing (Groq Whisper)
+
+The browser's built-in `SpeechRecognition` (`webkitSpeechRecognition`) doesn't work in Electron — its backend is Google's speech service, gated behind an API key baked into official Chrome builds only, so it fails with a `network` error in any Chromium embedder. Voice typing instead records real audio locally and transcribes it server-side via Groq's Whisper API.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Box as PromptBox (renderer)
+    participant Rec as MediaRecorder
+    participant API as api.py
+    participant Voice as voice.py
+    participant Groq as Groq Whisper API
+
+    User->>Box: click mic
+    Box->>Rec: getUserMedia({audio:true}) + start()
+    User->>Box: click mic again (stop)
+    Rec-->>Box: audio Blob (webm/opus)
+    Box->>Box: Blob → base64 (FileReader)
+    Box->>API: POST /audio/transcribe {data, mime}
+    API->>Voice: transcribe(api_key, data, mime)
+    Voice->>Groq: multipart POST /openai/v1/audio/transcriptions<br/>(model = whisper-large-v3-turbo)
+    Groq-->>Voice: {text}
+    Voice-->>API: text
+    API-->>Box: {text}
+    Box->>Box: insert into textarea (appended to any existing draft)
+```
+
+The Groq API key is stored the same way as every other provider key — via `credentials_store.py` (`GROQ_API_KEY`), managed from **Profile → Advanced → Voice typing**. If no key is configured, `/audio/transcribe` returns `400` and the UI shows "Add a Groq API key in Profile → Advanced to enable voice typing." instead of a raw error. Recording state (idle / recording / transcribing) is all client-side — the backend has no notion of an in-progress recording.
+
+Key files: `chatgpt-prompt-input.tsx` (`handleMicClick`, `handleTranscription`), `server/api.py` (`POST /audio/transcribe`, `/settings/voice`), `server/voice.py`.
 
 ---
 
@@ -290,7 +407,9 @@ LOCAL_LLM_BASE_URL=http://localhost:11434/v1
 LOCAL_LLM_MODEL=llama3.2
 ```
 
-For web search, add a Tavily API key in Advanced settings or set `TAVILY_API_KEY` in `.env`.
+For web search (and research mode), add a Tavily API key in Advanced settings or set `TAVILY_API_KEY` in `.env`.
+
+For voice typing, add a Groq API key (from [console.groq.com](https://console.groq.com)) in Advanced settings or set `GROQ_API_KEY` in `.env`.
 
 ---
 
@@ -308,6 +427,12 @@ OPENROUTER_API_KEY=
 # Local LLM (no key required)
 LOCAL_LLM_BASE_URL=http://localhost:11434/v1
 LOCAL_LLM_MODEL=llama3.2
+
+# Web search / research mode (Tavily)
+TAVILY_API_KEY=
+
+# Voice typing (Groq Whisper)
+GROQ_API_KEY=
 
 # Brain (persistent memory) — see server/.env.example for all BRAIN_* knobs
 BRAIN_ENABLED=1
@@ -345,8 +470,10 @@ With the brain enabled, **both** modes write to and recall from global memory. S
 | `POST` | `/sessions/{id}/new_chat` | Reset conversation context |
 | `DELETE` | `/sessions/{id}` | Close and drop session |
 | `POST` | `/images/generate` | Standalone image generation (OpenAI, Gemini) |
-| `POST` | `/websearch` | Tavily web search |
+| `POST` | `/websearch` | Tavily web search (backs both Search-web and Research mode) |
 | `GET/PUT/DELETE` | `/settings/search` | Tavily API key management |
+| `POST` | `/audio/transcribe` | Voice typing — transcribe recorded audio via Groq Whisper |
+| `GET/PUT/DELETE` | `/settings/voice` | Groq API key management |
 | `GET` | `/memory/search?q=` | Plain semantic search across all memory |
 | `POST` | `/memory/search` | Graph-aware search (vector hits + entity facts) |
 | `GET` | `/threads/{id}/summary` | Thread rolling summary |

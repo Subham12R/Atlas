@@ -1,0 +1,10 @@
+# NEVER commit your cookies/secrets
+.env
+.env.bak
+__pycache__/
+*.pyc
+.venv/
+
+# brain memory store (contains your conversation history)
+brain.db
+*.db

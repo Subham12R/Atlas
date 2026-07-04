@@ -1,0 +1,11 @@
+python-dotenv>=1.0.1
+fastapi>=0.115          # api.py: HTTP layer
+uvicorn>=0.30           # api.py: ASGI server
+openai>=1.55            # adapters/openai_adapter.py (also backs openrouter/local via base_url override)
+anthropic>=0.40         # adapters/anthropic_adapter.py
+google-genai>=0.3       # adapters/gemini_adapter.py
+sqlite-vec>=0.1.9       # brain: vector search in SQLite
+fastembed>=0.8          # brain: local ONNX embeddings (no torch)
+langchain-core==0.3.86         # brain/chunking.py: Embeddings interface wrapped around fastembed
+langchain-experimental==0.3.4  # brain/chunking.py: SemanticChunker (semantic-boundary chunking; upstream archived, pinned exact)
+httpx>=0.27             # websearch.py: Tavily REST API client

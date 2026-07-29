@@ -21,6 +21,17 @@ def _flag(name: str, default: str = "1") -> bool:
     return os.getenv(name, default).strip() not in ("", "0", "false", "False")
 
 
+def _optional_float(name: str, default: str = "") -> float | None:
+    """Read an optional float, treating a comment-only value as unset."""
+    raw = os.getenv(name, default).partition("#")[0].strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number; got {raw!r}") from exc
+
+
 BRAIN_ENABLED = _flag("BRAIN_ENABLED", "1")
 BRAIN_DB_PATH = os.getenv("BRAIN_DB_PATH", "brain.db").strip()
 BRAIN_EMBED_MODEL = os.getenv("BRAIN_EMBED_MODEL", "BAAI/bge-small-en-v1.5").strip()
@@ -32,10 +43,8 @@ BRAIN_CONTEXT_BUDGET = int(os.getenv("BRAIN_CONTEXT_BUDGET", "2000"))
 BRAIN_CHUNK_CHARS = int(os.getenv("BRAIN_CHUNK_CHARS", "800"))
 BRAIN_CHUNK_OVERLAP = int(os.getenv("BRAIN_CHUNK_OVERLAP", "100"))
 BRAIN_CHUNK_BREAKPOINT_TYPE = os.getenv("BRAIN_CHUNK_BREAKPOINT_TYPE", "percentile").strip()
-_bp_amount_raw = os.getenv("BRAIN_CHUNK_BREAKPOINT_AMOUNT", "").strip()
-BRAIN_CHUNK_BREAKPOINT_AMOUNT = float(_bp_amount_raw) if _bp_amount_raw else None
-_max_dist_raw = os.getenv("BRAIN_MAX_DISTANCE", "0.6").strip()
-BRAIN_MAX_DISTANCE = float(_max_dist_raw) if _max_dist_raw else None
+BRAIN_CHUNK_BREAKPOINT_AMOUNT = _optional_float("BRAIN_CHUNK_BREAKPOINT_AMOUNT")
+BRAIN_MAX_DISTANCE = _optional_float("BRAIN_MAX_DISTANCE", "0.6")
 
 PROVIDERS = ["openai", "anthropic", "gemini", "openrouter", "local"]
 ANON_OK: set[str] = set()
@@ -89,7 +98,8 @@ def build_adapter(pkey: str, anonymous: bool = False, model: str | None = None):
     if pkey == "local":
         base_url = credentials_store.get_value("LOCAL_LLM_BASE_URL") or None
         local_model = model or credentials_store.get_value("LOCAL_LLM_MODEL") or None
-        return LocalAdapter(base_url=base_url, model=local_model, debug=DEBUG)
+        api_key = credentials_store.get_value("LOCAL_LLM_API_KEY") or None
+        return LocalAdapter(base_url=base_url, model=local_model, api_key=api_key, debug=DEBUG)
 
     raise ValueError(f"unknown provider {pkey!r}")
 

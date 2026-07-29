@@ -16,6 +16,7 @@ import {
   deleteProviderSettings,
   deleteSearchSettings,
   deleteVoiceSettings,
+  getLocalModels,
   getProviderSettings,
   getSearchSettings,
   getVoiceSettings,
@@ -33,6 +34,15 @@ const KEY_PROVIDERS = [
   { id: 'gemini', name: 'Gemini', hint: 'From aistudio.google.com -> Get API key' },
   { id: 'openrouter', name: 'OpenRouter', hint: 'From openrouter.ai -> Keys' }
 ]
+
+type LocalRuntime = 'ollama' | 'lmstudio' | 'vllm' | 'local'
+
+const LOCAL_RUNTIME_PRESETS: Record<LocalRuntime, { label: string; baseUrl: string }> = {
+  ollama: { label: 'Ollama', baseUrl: 'http://localhost:11434/v1' },
+  lmstudio: { label: 'LM Studio', baseUrl: 'http://localhost:1234/v1' },
+  vllm: { label: 'vLLM', baseUrl: 'http://localhost:8000/v1' },
+  local: { label: 'Custom OpenAI-compatible server', baseUrl: '' }
+}
 
 interface ProfileProps {
   onClose: () => void
@@ -86,8 +96,11 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
   const [savingProvider, setSavingProvider] = useState<string | null>(null)
   const [savedProvider, setSavedProvider] = useState<string | null>(null)
 
+  const [localRuntime, setLocalRuntime] = useState<LocalRuntime>('ollama')
   const [localBaseUrl, setLocalBaseUrl] = useState('')
   const [localModel, setLocalModel] = useState('')
+  const [localApiKey, setLocalApiKey] = useState('')
+  const [localModels, setLocalModels] = useState<string[]>([])
   const [testingLocal, setTestingLocal] = useState(false)
   const [localTestResult, setLocalTestResult] = useState<{ ok: boolean; message: string } | null>(
     null
@@ -176,17 +189,25 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
     }
   }
 
+  const refreshLocalModels = (): void => {
+    getLocalModels()
+      .then((result) => setLocalModels(result.models))
+      .catch(() => setLocalModels([]))
+  }
+
   const refreshProviderSettings = (): void => {
     getProviderSettings()
       .then((s) => {
         setProviderSettingsState(s)
         if (s.local) {
+          setLocalRuntime(s.local.runtime || 'ollama')
           setLocalBaseUrl(s.local.base_url || '')
           setLocalModel(s.local.model || '')
         }
         if (s.openrouter) {
           setOpenrouterModel(s.openrouter.model || '')
         }
+        refreshLocalModels()
         // Lets the model selector (ChatArea) know it should refetch and
         // re-filter down to only actively-configured providers.
         window.dispatchEvent(new Event('providers:updated'))
@@ -245,7 +266,14 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
     setTestingLocal(true)
     setLocalTestResult(null)
     try {
-      await setProviderSettings('local', { base_url: localBaseUrl, model: localModel })
+      await setProviderSettings('local', {
+        base_url: localBaseUrl,
+        model: localModel,
+        runtime: localRuntime,
+        ...(localApiKey.trim() ? { api_key: localApiKey.trim() } : {})
+      })
+      setLocalApiKey('')
+      refreshProviderSettings()
       const res = await testProviderConnection('local')
       setLocalTestResult({ ok: true, message: res.reply || 'Connected.' })
     } catch (err) {
@@ -755,29 +783,88 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                     Local LLM
                   </h3>
                   <p className="text-[11px] text-[#6E6D6A] dark:text-[#9E9D9A] leading-relaxed">
-                    Prefer to run a model on this machine instead? Install{' '}
-                    <span className="font-medium">Ollama</span>, run{' '}
+                    Connect any OpenAI-compatible local server. Ollama (default), LM Studio, and
+                    vLLM are detected automatically; available models are fetched from its{' '}
                     <code className="px-1 py-0.5 bg-[#F1EFEA] dark:bg-[#2C2C2A] rounded text-[10px]">
-                      ollama pull &lt;model&gt;
-                    </code>
-                    , then point the two fields below at its OpenAI-compatible endpoint and the
-                    model name you pulled.
+                      /v1/models
+                    </code>{' '}
+                    endpoint.
                   </p>
+                  <label className="block text-[11px] font-medium text-[#6E6D6A] dark:text-[#9E9D9A]">
+                    Local server type
+                  </label>
+                  <select
+                    value={localRuntime}
+                    onChange={(e) => {
+                      const runtime = e.target.value as LocalRuntime
+                      setLocalRuntime(runtime)
+                      const preset = LOCAL_RUNTIME_PRESETS[runtime].baseUrl
+                      if (preset) setLocalBaseUrl(preset)
+                      setLocalModels([])
+                    }}
+                    className="w-full h-9 rounded-lg px-3 bg-[#F1EFEA] dark:bg-[#2C2C2A] text-sm text-[#2E2E2D] dark:text-[#EAE8E3] outline-none"
+                  >
+                    {(Object.keys(LOCAL_RUNTIME_PRESETS) as LocalRuntime[]).map((runtime) => (
+                      <option key={runtime} value={runtime}>
+                        {LOCAL_RUNTIME_PRESETS[runtime].label}
+                      </option>
+                    ))}
+                  </select>
                   <div className="flex flex-col sm:flex-row gap-2 w-full">
                     <input
                       value={localBaseUrl}
                       onChange={(e) => setLocalBaseUrl(e.target.value)}
-                      placeholder="Endpoint -- e.g. http://localhost:11434/v1"
+                      onBlur={refreshLocalModels}
+                      placeholder="Endpoint -- Ollama :11434, LM Studio :1234, or vLLM /v1"
                       className="flex-1 min-w-0 h-9 rounded-lg px-3 bg-[#F1EFEA] dark:bg-[#2C2C2A] text-sm text-[#2E2E2D] dark:text-[#EAE8E3] outline-none placeholder:text-[#9E9D9A]"
                     />
                     <input
+                      list="local-models"
                       value={localModel}
                       onChange={(e) => setLocalModel(e.target.value)}
-                      placeholder="Model name -- e.g. llama3.2"
+                      placeholder="Model name"
                       className="flex-1 min-w-0 h-9 rounded-lg px-3 bg-[#F1EFEA] dark:bg-[#2C2C2A] text-sm text-[#2E2E2D] dark:text-[#EAE8E3] outline-none placeholder:text-[#9E9D9A]"
+                    />
+                    <datalist id="local-models">
+                      {localModels.map((model) => (
+                        <option key={model} value={model} />
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-medium text-[#6E6D6A] dark:text-[#9E9D9A]">
+                      Local server API key <span className="font-normal">(optional)</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={localApiKey}
+                      onChange={(e) => setLocalApiKey(e.target.value)}
+                      placeholder={
+                        providerSettings.local?.api_key_configured
+                          ? 'API key saved - enter a new value to replace it'
+                          : 'Required only when LM Studio or vLLM is protected'
+                      }
+                      className="w-full h-9 rounded-lg px-3 bg-[#F1EFEA] dark:bg-[#2C2C2A] text-sm text-[#2E2E2D] dark:text-[#EAE8E3] outline-none placeholder:text-[#9E9D9A]"
                     />
                   </div>
                   <div className="flex items-center gap-2 pt-1">
+                    <button
+                      onClick={() => {
+                        void setProviderSettings('local', {
+                          base_url: localBaseUrl,
+                          model: localModel,
+                          runtime: localRuntime,
+                          ...(localApiKey.trim() ? { api_key: localApiKey.trim() } : {})
+                        }).then(() => {
+                          setLocalApiKey('')
+                          refreshLocalModels()
+                          refreshProviderSettings()
+                        })
+                      }}
+                      className="h-9 px-4 rounded-lg border border-[#E5E3DF] dark:border-[#2C2C2A] text-xs font-semibold hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] transition-colors cursor-pointer"
+                    >
+                      Refresh models
+                    </button>
                     <button
                       onClick={handleTestLocal}
                       disabled={testingLocal}

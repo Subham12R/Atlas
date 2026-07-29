@@ -194,16 +194,33 @@ export interface ProviderSettings {
   configured: boolean
   base_url?: string | null
   model?: string | null
+  runtime?: 'ollama' | 'lmstudio' | 'vllm' | 'local'
+  api_key_configured?: boolean
 }
 export type ProviderSettingsMap = Record<string, ProviderSettings>
+
+export interface LocalModelsResponse {
+  base_url: string
+  runtime: 'ollama' | 'lmstudio' | 'vllm' | 'local'
+  models: string[]
+}
 
 export function getProviderSettings(): Promise<ProviderSettingsMap> {
   return request('/settings/providers')
 }
 
+export function getLocalModels(): Promise<LocalModelsResponse> {
+  return request('/settings/providers/local/models')
+}
+
 export function setProviderSettings(
   provider: string,
-  body: { api_key?: string; base_url?: string; model?: string }
+  body: {
+    api_key?: string
+    base_url?: string
+    model?: string
+    runtime?: 'ollama' | 'lmstudio' | 'vllm' | 'local'
+  }
 ): Promise<{ ok: boolean }> {
   return request(`/settings/providers/${provider}`, {
     method: 'PUT',

@@ -20,6 +20,8 @@ import uuid
 from contextlib import asynccontextmanager
 
 import json
+
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -127,6 +129,58 @@ class ProviderSettingsUpdate(BaseModel):
     api_key: str | None = None
     base_url: str | None = None
     model: str | None = None
+    runtime: str | None = None
+
+
+def _local_runtime(base_url: str) -> str:
+    """Return an explicit user choice, or infer the common local-server default."""
+    configured = credentials_store.get_value("LOCAL_LLM_RUNTIME")
+    if configured in {"ollama", "lmstudio", "vllm", "local"}:
+        return configured
+    url = base_url.lower()
+    if "11434" in url or "ollama" in url:
+        return "ollama"
+    if "1234" in url or "lmstudio" in url:
+        return "lmstudio"
+    if "vllm" in url:
+        return "vllm"
+    return "local"
+
+
+def _local_base_url() -> str:
+    return credentials_store.get_value("LOCAL_LLM_BASE_URL") or "http://localhost:11434/v1"
+
+
+def _openai_models_url(base_url: str) -> str:
+    base_url = base_url.rstrip("/")
+    return f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+
+
+async def _discover_local_models(base_url: str) -> list[str]:
+    """List models from OpenAI-compatible servers, with Ollama-native fallback."""
+    api_key = credentials_store.get_value("LOCAL_LLM_API_KEY")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            response = await client.get(_openai_models_url(base_url), headers=headers)
+            response.raise_for_status()
+            data = response.json().get("data", [])
+            models = [item["id"] for item in data if isinstance(item, dict) and item.get("id")]
+            if models:
+                return models
+    except (httpx.HTTPError, ValueError, AttributeError):
+        pass
+
+    if _local_runtime(base_url) == "ollama":
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                response = await client.get(f"{base_url.split('/v1')[0].rstrip('/')}/api/tags")
+                response.raise_for_status()
+                data = response.json().get("models", [])
+                return [item["name"] for item in data if isinstance(item, dict) and item.get("name")]
+        except (httpx.HTTPError, ValueError, AttributeError):
+            pass
+    return []
 
 
 def _build(provider: str, anonymous: bool, model: str | None):
@@ -191,8 +245,10 @@ async def get_provider_settings():
         if p == "local":
             out[p] = {
                 "configured": True,
-                "base_url": credentials_store.get_value("LOCAL_LLM_BASE_URL"),
+                "base_url": _local_base_url(),
                 "model": credentials_store.get_value("LOCAL_LLM_MODEL"),
+                "runtime": _local_runtime(_local_base_url()),
+                "api_key_configured": bool(credentials_store.get_value("LOCAL_LLM_API_KEY")),
             }
             continue
         key = credentials_store.get_value(PROVIDER_ENV_KEYS[p])
@@ -206,6 +262,19 @@ async def get_provider_settings():
     return out
 
 
+@app.get("/settings/providers/local/models")
+async def get_local_models():
+    """Discover models exposed by Ollama, LM Studio, vLLM, or another
+    OpenAI-compatible local endpoint. An unreachable endpoint is represented
+    by an empty list so the settings UI can remain usable offline."""
+    base_url = _local_base_url()
+    return {
+        "base_url": base_url,
+        "runtime": _local_runtime(base_url),
+        "models": await _discover_local_models(base_url),
+    }
+
+
 @app.put("/settings/providers/{provider}")
 async def set_provider_settings(provider: str, body: ProviderSettingsUpdate):
     if provider not in PROVIDERS:
@@ -217,7 +286,14 @@ async def set_provider_settings(provider: str, body: ProviderSettingsUpdate):
             updates["LOCAL_LLM_BASE_URL"] = body.base_url
         if body.model is not None:
             updates["LOCAL_LLM_MODEL"] = body.model
-        credentials_store.set_many(updates)
+        if body.runtime is not None:
+            if body.runtime not in {"ollama", "lmstudio", "vllm", "local"}:
+                raise HTTPException(400, "runtime must be ollama, lmstudio, vllm, or local")
+            updates["LOCAL_LLM_RUNTIME"] = body.runtime
+        if body.api_key is not None:
+            updates["LOCAL_LLM_API_KEY"] = body.api_key
+        if updates:
+            credentials_store.set_many(updates)
         return {"ok": True}
 
     if provider == "openrouter":

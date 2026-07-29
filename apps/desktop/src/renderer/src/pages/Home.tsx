@@ -260,6 +260,7 @@ function Home(): React.JSX.Element {
     content: string,
     tool: string | null,
     provider: string,
+    model: string | null,
     attachments: Attachment[]
   ): Promise<void> => {
     let chatId = activeChatId
@@ -414,7 +415,8 @@ function Home(): React.JSX.Element {
     // A chat with an established provider that picks a different one mid-
     // conversation gets a fresh session -- a brand new chat (provider still
     // null) is never treated as a "switch".
-    const switchingProvider = !!baseChat.provider && baseChat.provider !== provider
+    const switchingProvider =
+      !!baseChat.provider && (baseChat.provider !== provider || baseChat.model !== model)
 
     // Set once the (empty) assistant placeholder is pushed, so a failure
     // partway through streaming can turn that same bubble into the error
@@ -426,12 +428,14 @@ function Home(): React.JSX.Element {
       let sessionId = baseChat.sessionId
       let threadId = baseChat.threadId
       let chatProvider = baseChat.provider ?? provider
+      let chatModel = baseChat.model ?? model
 
       if (switchingProvider) {
         if (sessionId) closeSession(sessionId).catch(() => {})
         sessionId = null
         threadId = null
         chatProvider = provider
+        chatModel = model
       }
 
       // Research mode is the same real search, just cast a wider net --
@@ -455,14 +459,14 @@ function Home(): React.JSX.Element {
       }
 
       if (!sessionId) {
-        const session = await createSession(chatProvider)
+        const session = await createSession(chatProvider, false, chatModel)
         sessionId = session.session_id
         threadId = session.thread_id
         chatProvider = session.provider
         setChats((prev) =>
           prev.map((chat) =>
             chat.id === targetChatId
-              ? { ...chat, sessionId, threadId, provider: chatProvider }
+              ? { ...chat, sessionId, threadId, provider: chatProvider, model: chatModel }
               : chat
           )
         )
@@ -475,6 +479,7 @@ function Home(): React.JSX.Element {
         content: '',
         timestamp: timestamp(),
         provider: chatProvider,
+        model: chatModel || undefined,
         isNew: true,
         tool: resolvedTool || undefined,
         sources:
@@ -515,7 +520,7 @@ function Home(): React.JSX.Element {
       } catch (err) {
         if (err instanceof ApiError && err.status === 404) {
           // session vanished (e.g. server restarted) -- transparently re-create
-          const session = await createSession(chatProvider)
+          const session = await createSession(chatProvider, false, chatModel)
           sessionId = session.session_id
           threadId = session.thread_id
           setChats((prev) =>

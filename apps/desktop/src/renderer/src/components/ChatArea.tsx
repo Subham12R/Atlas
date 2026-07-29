@@ -17,13 +17,13 @@ import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai/r
 import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai/task'
 import { Plan, PlanHeader, PlanTitle, PlanTrigger, PlanContent } from '@/components/ai/plan'
 import { Sources, SourcesTrigger, SourcesContent, Source } from '@/components/ai/sources'
-import { getProviderSettings, type ProviderSettingsMap } from '@/lib/api'
+import { getLocalModels, getProviderSettings, type ProviderSettingsMap } from '@/lib/api'
 import ThemeSwitch from '@/components/ui/theme-switch'
 import geminiLogo from '@/assets/icon/gemini.svg'
 import openaiLogo from '@/assets/icon/openai.svg'
 import claudeLogo from '@/assets/icon/claude.png'
-import openRouterLogo from '@/assets/icon/openrouter.svg'
-import ollamaLogo from '@/assets/icon/ollama.png'
+import openRouterLogo from '@/assets/icon/openrouter.png'
+
 export interface MessageFileAttachment {
   kind: 'file'
   name: string
@@ -43,6 +43,8 @@ export interface Message {
   content: string
   timestamp: string
   provider?: string
+  /** Concrete model selected within a provider (primarily local servers). */
+  model?: string
   latencyMs?: number
   /** Marks a just-arrived assistant reply so ChatArea typewriter-reveals it
    * once; historical messages (loaded, not freshly received) render instantly. */
@@ -68,6 +70,8 @@ export interface Chat {
   timestamp: string
   messages: Message[]
   provider: string | null
+  /** Concrete model bound to the current provider session. */
+  model?: string | null
   sessionId: string | null
   threadId: string | null
   isSending?: boolean
@@ -84,6 +88,7 @@ interface ChatAreaProps {
     content: string,
     tool: string | null,
     provider: string,
+    model: string | null,
     attachments: Attachment[]
   ) => void
   onNewChat: () => void
@@ -92,18 +97,90 @@ interface ChatAreaProps {
   onStopSending: (chatId: string) => void
 }
 
-const MODELS = [
-  { id: 'openai', name: 'OpenAI', desc: 'GPT models via official API', logo: openaiLogo },
-  { id: 'anthropic', name: 'Anthropic', desc: 'Claude models via official API', logo: claudeLogo },
-  { id: 'gemini', name: 'Gemini', desc: 'Google Gemini via official API', logo: geminiLogo },
+type ModelOption = {
+  id: string
+  provider: string
+  model?: string
+  name: string
+  desc: string
+  logo: string | null
+}
+
+const MODELS: ModelOption[] = [
+  { id: 'openai', provider: 'openai', name: 'OpenAI', desc: 'GPT models via official API', logo: openaiLogo },
+  { id: 'anthropic', provider: 'anthropic', name: 'Anthropic', desc: 'Claude models via official API', logo: claudeLogo },
+  { id: 'gemini', provider: 'gemini', name: 'Gemini', desc: 'Google Gemini via official API', logo: geminiLogo },
   {
     id: 'openrouter',
+    provider: 'openrouter',
     name: 'OpenRouter',
     desc: 'Any model, routed through OpenRouter',
     logo: openRouterLogo
   },
-  { id: 'local', name: 'Ollama', desc: 'Your own local model (Ollama, ...)', logo: ollamaLogo }
+  {
+    id: 'local',
+    provider: 'local',
+    name: 'Local model',
+    desc: 'Ollama, LM Studio, vLLM, or another local server',
+    logo: null
+  }
 ]
+
+// Match model IDs returned by local servers (for example `qwen2.5:7b`,
+// `mistralai/Mistral-7B-Instruct`, or `TheBloke/deepseek-coder`). Every
+// distinct model/provider family in public/logos has a corresponding rule.
+const LOCAL_MODEL_LOGOS: [RegExp, string][] = [
+  [/\bamp\b/i, '/logos/amp-logo.svg'],
+  [/anthropic/i, '/logos/anthropic.svg'],
+  [/antigravity/i, '/logos/antigravity.svg'],
+  [/claude(?:code)?/i, '/logos/claude.svg'],
+  [/cursor/i, '/logos/cursor.svg'],
+  [/deepseek/i, '/logos/deepseek.svg'],
+  [/factory/i, '/logos/factory.png'],
+  [/gemini/i, '/logos/gemini.svg'],
+  [/gemma/i, '/logos/gemma.png'],
+  [/github/i, '/logos/github.svg'],
+  [/google/i, '/logos/google.svg'],
+  [/hermes/i, '/logos/hermes.png'],
+  [/huggingface|hugging/i, '/logos/huggingface.svg'],
+  [/kilo/i, '/logos/kilo.png'],
+  [/kimi|moonshot/i, '/logos/kimi.png'],
+  [/maincode/i, '/logos/maincode.png'],
+  [/llama|meta-/i, '/logos/meta.svg'],
+  [/mistral|mixtral/i, '/logos/mistral.svg'],
+  [/openclaw/i, '/logos/openclaw.jpeg'],
+  [/opencode/i, '/logos/opencode.svg'],
+  [/perplexity|sonar/i, '/logos/perplexity.svg'],
+  [/qwen/i, '/logos/qwen.svg'],
+  [/gpt|openai/i, '/logos/openai.svg'],
+  [/grok|xai/i, '/logos/xai.svg']
+]
+
+function localModelLogo(model: string, runtime: string): string | null {
+  return (
+    LOCAL_MODEL_LOGOS.find(([pattern]) => pattern.test(model))?.[1] ||
+    (runtime === 'ollama' ? '/logos/ollama.svg' : null)
+  )
+}
+
+function localModelOption(model: string, runtime: string = 'local'): ModelOption {
+  const runtimeName =
+    runtime === 'lmstudio'
+      ? 'LM Studio'
+      : runtime === 'vllm'
+        ? 'vLLM'
+        : runtime === 'ollama'
+          ? 'Ollama'
+          : 'Local'
+  return {
+    id: `local:${model}`,
+    provider: 'local',
+    model,
+    name: model,
+    desc: `${runtimeName} local model`,
+    logo: localModelLogo(model, runtime)
+  }
+}
 
 /** Providers without a bundled logo image (OpenRouter, Local) fall back to a
  * simple initials badge instead of an <img>. */
@@ -333,6 +410,7 @@ export default function ChatArea({
   const [isExportingPdf, setIsExportingPdf] = useState(false)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [providerSettings, setProviderSettings] = useState<ProviderSettingsMap>({})
+  const [localModels, setLocalModels] = useState<string[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
@@ -344,13 +422,22 @@ export default function ChatArea({
       getProviderSettings()
         .then(setProviderSettings)
         .catch(() => {})
+      getLocalModels()
+        .then((result) => setLocalModels(result.models))
+        .catch(() => setLocalModels([]))
     }
     refresh()
     window.addEventListener('providers:updated', refresh)
     return () => window.removeEventListener('providers:updated', refresh)
   }, [])
 
-  const activeModels = MODELS.filter((m) => providerSettings[m.id]?.configured)
+  const activeModels = MODELS.filter((m) => providerSettings[m.provider]?.configured).flatMap((option) => {
+    if (option.provider !== 'local') return option
+    const runtime = providerSettings.local?.runtime || 'local'
+    return localModels.length > 0
+      ? localModels.map((model) => localModelOption(model, runtime))
+      : [option]
+  })
 
   const handleScroll = (): void => {
     const el = scrollContainerRef.current
@@ -377,7 +464,11 @@ export default function ChatArea({
   const currentChatId = activeChat?.id ?? null
   if (currentChatId !== syncedChatId) {
     setSyncedChatId(currentChatId)
-    if (activeChat?.provider) setSelectedModel(activeChat.provider)
+    if (activeChat?.provider) {
+      setSelectedModel(
+        activeChat.provider === 'local' && activeChat.model ? `local:${activeChat.model}` : activeChat.provider
+      )
+    }
   }
 
   // A brand-new chat (no provider bound yet) shouldn't default to a provider
@@ -403,7 +494,7 @@ export default function ChatArea({
     selectedTool: string | null,
     attachments: Attachment[]
   ): void => {
-    onSendMessage(text, selectedTool, effectiveModel, attachments)
+    onSendMessage(text, selectedTool, selectedModelObj.provider, selectedModelObj.model || null, attachments)
   }
 
   // Custom typography parser for markdown-like formatting
@@ -737,7 +828,16 @@ export default function ChatArea({
     </>
   )
 
-  const selectedModelObj = MODELS.find((m) => m.id === effectiveModel) || MODELS[0]
+  const selectedModelObj = activeModels.find((m) => m.id === effectiveModel) || MODELS[0]
+  const optionForMessage = (provider?: string, model?: string): ModelOption | undefined => {
+    if (provider === 'local') {
+      return (
+        activeModels.find((option) => option.provider === provider && option.model === model) ||
+        localModelOption(model || providerSettings.local?.model || 'Local model', providerSettings.local?.runtime)
+      )
+    }
+    return MODELS.find((option) => option.provider === provider)
+  }
 
   return (
     <main className="flex-1 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#171717] relative overflow-hidden">
@@ -940,7 +1040,7 @@ export default function ChatArea({
                 return (
                   <>
                     {activeChat.messages.map((message) => {
-                      const respondingModel = MODELS.find((m) => m.id === message.provider)
+                      const respondingModel = optionForMessage(message.provider, message.model)
                       const isStreamingMessage =
                         !!activeChat.isSending &&
                         message.sender === 'assistant' &&
@@ -1037,7 +1137,7 @@ export default function ChatArea({
                       <div className="flex gap-3.5 md:gap-5 pb-4 justify-start">
                         <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 select-none overflow-hidden">
                           {(() => {
-                            const pendingModel = MODELS.find((m) => m.id === activeChat.provider)
+                            const pendingModel = optionForMessage(activeChat.provider || undefined, activeChat.model || undefined)
                             return pendingModel ? (
                               <ProviderLogo
                                 id={pendingModel.id}

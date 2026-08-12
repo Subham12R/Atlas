@@ -1,4 +1,4 @@
-appId: com.electron.app
+appId: com.subham12r.atlas
 productName: Atlas
 directories:
   buildResources: build
@@ -11,6 +11,11 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+extraResources:
+  - from: resources/server
+    to: server
+    filter:
+      - atlas-server
 win:
   executableName: Atlas
   icon: build/icon.ico
@@ -20,6 +25,7 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  icon: build/icon.icns
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.

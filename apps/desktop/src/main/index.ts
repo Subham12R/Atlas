@@ -1,4 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+import { spawn, type ChildProcess } from 'child_process'
+import { existsSync } from 'fs'
 import { join } from 'path'
 import bcrypt from 'bcryptjs'
 import { writeFile, rm, readFile, mkdir, rename } from 'fs/promises'
@@ -109,6 +111,40 @@ async function saveSession(email: string | null): Promise<void> {
 }
 
 const BACKEND_URL = 'http://127.0.0.1:8000'
+let backendProcess: ChildProcess | null = null
+
+function startEmbeddedBackend(): void {
+  // Development continues to use the explicitly started uvicorn process. The
+  // packaged app starts its PyInstaller-bundled server from app resources.
+  if (is.dev || backendProcess) return
+
+  const serverPath = join(process.resourcesPath, 'server', 'atlas-server')
+  if (!existsSync(serverPath)) {
+    console.error(`Embedded Atlas server is missing: ${serverPath}`)
+    return
+  }
+
+  const dataPath = app.getPath('userData')
+  backendProcess = spawn(serverPath, [], {
+    cwd: dataPath,
+    env: {
+      ...process.env,
+      BRAIN_DB_PATH: join(dataPath, 'brain.db'),
+      CHATS_DB_PATH: join(dataPath, 'chats.db'),
+      CREDENTIALS_DB_PATH: join(dataPath, 'credentials.db')
+    },
+    stdio: 'ignore'
+  })
+  backendProcess.once('exit', (code) => {
+    console.error(`Embedded Atlas server exited with code ${code}`)
+    backendProcess = null
+  })
+}
+
+function stopEmbeddedBackend(): void {
+  backendProcess?.kill()
+  backendProcess = null
+}
 
 async function getChats(): Promise<unknown[]> {
   let backendChats: unknown[] = []
@@ -229,7 +265,7 @@ async function setProfile(profile: Profile): Promise<void> {
 
 async function hasAppPassword(): Promise<boolean> {
   const users = await getUsers()
-  return users.length > 0
+  return users.some((user) => Boolean(user.passwordHash))
 }
 
 async function setAppPassword(password: string | null): Promise<void> {
@@ -370,6 +406,7 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(async () => {
   currentSessionEmail = await getSessionEmail()
+  startEmbeddedBackend()
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
@@ -434,6 +471,8 @@ app.whenReady().then(async () => {
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
+app.on('before-quit', stopEmbeddedBackend)
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()

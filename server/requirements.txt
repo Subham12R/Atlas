@@ -9,3 +9,4 @@ fastembed>=0.8          # brain: local ONNX embeddings (no torch)
 langchain-core==0.3.86         # brain/chunking.py: Embeddings interface wrapped around fastembed
 langchain-experimental==0.3.4  # brain/chunking.py: SemanticChunker (semantic-boundary chunking; upstream archived, pinned exact)
 httpx>=0.27             # websearch.py: Tavily REST API client
+pyinstaller>=6.12       # release: bundles the embedded FastAPI server for Electron

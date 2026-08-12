@@ -290,6 +290,7 @@ export default function Sidebar({
                           : 'text-[#9E9D9A] dark:text-[#6E6D6A]'
                       )}
                     />
+                    {chat.isSending && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500" title="Response in progress" />}
                     {!isCollapsed &&
                       (editingChatId === chat.id ? (
                         <input
@@ -445,6 +446,7 @@ export default function Sidebar({
                       size={14}
                       className="shrink-0 text-[#9E9D9A] group-hover:text-[#2E2E2D] dark:text-[#6E6D6A] dark:group-hover:text-[#EAE8E3]"
                     />
+                    {chat.isSending && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500" title="Response in progress" />}
                     {!isCollapsed &&
                       (editingChatId === chat.id ? (
                         <input

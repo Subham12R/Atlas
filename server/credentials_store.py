@@ -54,7 +54,7 @@ def set_many(updates: dict[str, str]) -> None:
 
 def get_value(key: str) -> str:
     """DB (post-rotation) takes precedence over .env (bootstrap)."""
-    return get(key) or os.getenv(key, "").strip()
+    return (get(key) or os.getenv(key, "")).strip()
 
 
 def delete(key: str) -> None:

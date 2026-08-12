@@ -55,8 +55,21 @@ class MemoryStore:
         self.con.commit()
         return mid
 
+    def recent_chunks(self, thread_id: str, limit: int = 2) -> list[tuple]:
+        """Latest searchable chunks from this thread, newest first."""
+        rows = self.con.execute(
+            """SELECT c.text, c.thread_id
+               FROM chunks c
+               JOIN messages m ON m.id = c.message_id
+               WHERE c.thread_id=? AND m.role='assistant'
+               ORDER BY c.id DESC LIMIT ?""",
+            (thread_id, limit),
+        ).fetchall()
+        return [(row["text"], row["thread_id"], 0.0) for row in reversed(rows)]
+
     def search(self, embedding: list[float], k: int = 6,
-              max_distance: float | None = None) -> list[tuple]:
+              max_distance: float | None = None,
+              preferred_thread_id: str | None = None) -> list[tuple]:
         """Nearest chunks -> [(text, thread_id, distance), ...].
 
         `vec_chunks` uses `distance_metric=cosine` (0 = identical, 2 = opposite).
@@ -81,6 +94,11 @@ class MemoryStore:
 
         if max_distance is not None:
             rows = [r for r in rows if r["distance"] <= max_distance][:k * 3]
+
+        # Keep the active conversation coherent: when its hits are relevant,
+        # place them before equally relevant cross-conversation memories.
+        if preferred_thread_id:
+            rows.sort(key=lambda row: (row["thread_id"] != preferred_thread_id, row["distance"]))
 
         return [(r["text"], r["thread_id"], r["distance"]) for r in rows]
 

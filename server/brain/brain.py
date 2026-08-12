@@ -47,17 +47,18 @@ class Brain:
                 self.auto_summary = False
 
     async def send(self, prompt: str, images=None):
-        context = build_context(self.store, self.embedder, prompt,
-                                self.thread_id, self.topk, self.budget,
-                                self.max_distance)
+        context, recall = build_context(self.store, self.embedder, prompt,
+                                        self.thread_id, self.topk, self.budget,
+                                        self.max_distance)
         augmented = f"{context}\n\n{prompt}" if context else prompt
         if DEBUG and context:
             print(f"[brain] injected {len(context)} chars of context")
 
         reply = await self.adapter.send(augmented, images)
 
-        self._store_turn("user", prompt)
+        self._store_turn("user", self._memory_text(prompt))
         self._store_turn("assistant", reply.text, meta=reply.meta)
+        reply.meta = {**reply.meta, "memory": recall}
 
         if self.auto_summary:
             await self._enrich(prompt, reply.text)
@@ -65,9 +66,9 @@ class Brain:
 
     async def send_stream(self, prompt: str, images=None):
         t0 = time.monotonic()
-        context = build_context(self.store, self.embedder, prompt,
-                                self.thread_id, self.topk, self.budget,
-                                self.max_distance)
+        context, recall = build_context(self.store, self.embedder, prompt,
+                                        self.thread_id, self.topk, self.budget,
+                                        self.max_distance)
         if DEBUG:
             print(f"[brain] recall took {time.monotonic() - t0:.2f}s"
                   f"{f' ({len(context)} chars)' if context else ''}")
@@ -85,11 +86,25 @@ class Brain:
 
         full_text = "".join(text_chunks)
 
-        self._store_turn("user", prompt)
+        self._store_turn("user", self._memory_text(prompt))
         self._store_turn("assistant", full_text)
+        yield {"memory": recall}
 
         if self.auto_summary:
             await self._enrich(prompt, full_text)
+
+    @staticmethod
+    def _memory_text(prompt: str) -> str:
+        """Exclude client-injected wrappers so retrieval represents the user intent."""
+        for marker in (
+            "[System Instruction - Personalization Settings]",
+            "[System Instruction - Formatting]",
+            "[Web search results]",
+            "[Recent conversation before switching model]",
+        ):
+            if marker in prompt:
+                prompt = prompt.split(marker, 1)[-1]
+        return prompt.strip()
 
     def _store_turn(self, role: str, content: str, meta: dict | None = None) -> None:
         """Chunk long messages, batch-embed the chunks, and persist them."""

@@ -52,17 +52,28 @@ export function friendlyErrorMessage(err: unknown, fallback: string): string {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  let res: Response
-  try {
-    res = await fetch(`${API_BASE}${path}`, {
-      ...options,
-      headers: { 'Content-Type': 'application/json', ...options.headers }
-    })
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new ApiAborted('request aborted')
+  let res: Response | undefined
+  let lastError: unknown
+  // The packaged Electron app may render shortly before its embedded FastAPI
+  // process opens the localhost port. Retry transient connection failures so
+  // saved provider settings load automatically on first launch.
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      res = await fetch(`${API_BASE}${path}`, {
+        ...options,
+        headers: { 'Content-Type': 'application/json', ...options.headers }
+      })
+      break
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        throw new ApiAborted('request aborted')
+      }
+      lastError = err
+      await new Promise((resolve) => setTimeout(resolve, 300))
     }
-    throw new ApiError(0, 'Could not reach the Atlas server. Is it running?')
+  }
+  if (!res) {
+    throw new ApiError(0, lastError ? 'Could not reach the Atlas server. Is it running?' : 'Could not reach the Atlas server.')
   }
 
   if (!res.ok) {
@@ -110,11 +121,18 @@ export function sendMessage(
   })
 }
 
+export interface MemoryRecall {
+  summary: boolean
+  hits: { text: string; thread_id: string; distance: number }[]
+  facts: string[]
+}
+
 export async function sendMessageStream(
   sessionId: string,
   prompt: string,
   images: { data: string; mime: string }[] | undefined,
   onToken: (token: string) => void,
+  onMemory?: (memory: MemoryRecall) => void,
   signal?: AbortSignal
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/sessions/${sessionId}/messages/stream`, {
@@ -157,7 +175,7 @@ export async function sendMessageStream(
         if (!trimmed.startsWith('data: ')) continue
 
         const dataStr = trimmed.slice(6)
-        let parsed: { text?: string; error?: string }
+        let parsed: { text?: string; error?: string; memory?: MemoryRecall }
         try {
           parsed = JSON.parse(dataStr)
         } catch (e) {
@@ -173,6 +191,9 @@ export async function sendMessageStream(
         }
         if (parsed.text) {
           onToken(parsed.text)
+        }
+        if (parsed.memory) {
+          onMemory?.(parsed.memory)
         }
       }
     }

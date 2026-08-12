@@ -2,11 +2,19 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from pathlib import Path
 
 import sqlite_vec
 
-_SCHEMA = Path(__file__).with_name("schema.sql")
+# PyInstaller extracts bundled data files to ``sys._MEIPASS``. Resolve the
+# schema there in a packaged server, while retaining the source-tree path for
+# development and tests.
+_SCHEMA = (
+    Path(getattr(sys, "_MEIPASS")) / "brain" / "schema.sql"
+    if getattr(sys, "frozen", False)
+    else Path(__file__).with_name("schema.sql")
+)
 
 
 def connect(db_path: str, dim: int) -> sqlite3.Connection:

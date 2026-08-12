@@ -25,6 +25,7 @@ import {
   sendMessageStream,
   webSearch,
   type ImagePayload,
+  type MemoryRecall,
   type SearchResult
 } from '@/lib/api'
 
@@ -159,6 +160,7 @@ function buildPersonalizationContext(profile: UserProfile | null): string {
 function Home(): React.JSX.Element {
   const [chats, setChats] = useState<Chat[]>([])
   const [chatsLoaded, setChatsLoaded] = useState(false)
+  const hasLoadedStoredChats = useRef(false)
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -167,11 +169,16 @@ function Home(): React.JSX.Element {
 
   const activeChat = chats.find((chat) => chat.id === activeChatId) || null
   const abortControllers = useRef(new Map<string, AbortController>())
+  const queuedMessages = useRef(
+    new Map<string, { content: string; tool: string | null; provider: string; model: string | null; attachments: Attachment[] }[]>()
+  )
+  const processingQueued = useRef(new Set<string>())
 
   // Restore chat history saved to disk from a previous session.
   useEffect(() => {
     window.api.getChats().then((stored) => {
       setChats(stored as Chat[])
+      hasLoadedStoredChats.current = true
       setChatsLoaded(true)
     })
   }, [])
@@ -193,7 +200,10 @@ function Home(): React.JSX.Element {
   // Persist on every change, once the initial load has completed -- guards
   // against the empty initial state overwriting what's on disk.
   useEffect(() => {
-    if (!chatsLoaded) return
+    if (!chatsLoaded || !hasLoadedStoredChats.current) return
+    // Do not replace an existing library with an empty startup snapshot.
+    // New empty chats are still persisted once the user intentionally creates one.
+    if (chats.length === 0) return
     window.api.setChats(chats)
   }, [chats, chatsLoaded])
 
@@ -266,7 +276,17 @@ function Home(): React.JSX.Element {
     let chatId = activeChatId
     let baseChat = chatId ? chats.find((c) => c.id === chatId) : undefined
 
-    if (baseChat?.isSending) return
+    if (baseChat?.isSending && chatId && !processingQueued.current.has(chatId)) {
+      const queue = queuedMessages.current.get(chatId) || []
+      queue.push({ content, tool, provider, model, attachments })
+      queuedMessages.current.set(chatId, queue)
+      setChats((prev) =>
+        prev.map((chat) =>
+          chat.id === chatId ? { ...chat, queuedCount: queue.length } : chat
+        )
+      )
+      return
+    }
 
     if (!chatId || !baseChat) {
       chatId = `chat-${Date.now()}`
@@ -285,6 +305,7 @@ function Home(): React.JSX.Element {
     }
 
     const targetChatId = chatId
+    processingQueued.current.delete(targetChatId)
     // A plain-text image request with no tool explicitly picked (and nothing
     // attached, since an attachment implies vision/file context instead)
     // still routes to real image generation -- see detectImageIntent above.
@@ -496,6 +517,20 @@ function Home(): React.JSX.Element {
         )
       )
 
+      const handleMemoryRecall = (memory: MemoryRecall): void => {
+        setChats((prev) =>
+          prev.map((chat) => {
+            if (chat.id !== targetChatId) return chat
+            return {
+              ...chat,
+              messages: chat.messages.map((message) =>
+                message.id === assistantMsgId ? { ...message, memory } : message
+              )
+            }
+          })
+        )
+      }
+
       const handleStreamToken = (token: string): void => {
         setChats((prev) =>
           prev.map((chat) => {
@@ -515,6 +550,7 @@ function Home(): React.JSX.Element {
           promptToSend,
           imagePayloads,
           handleStreamToken,
+          handleMemoryRecall,
           controller.signal
         )
       } catch (err) {
@@ -544,6 +580,7 @@ function Home(): React.JSX.Element {
             promptToSend,
             imagePayloads,
             handleStreamToken,
+            handleMemoryRecall,
             controller.signal
           )
         } else {
@@ -600,6 +637,18 @@ function Home(): React.JSX.Element {
       )
     } finally {
       abortControllers.current.delete(targetChatId)
+      const next = queuedMessages.current.get(targetChatId)?.shift()
+      const remaining = queuedMessages.current.get(targetChatId) || []
+      if (remaining.length === 0) queuedMessages.current.delete(targetChatId)
+      setChats((prev) =>
+        prev.map((chat) =>
+          chat.id === targetChatId ? { ...chat, queuedCount: remaining.length } : chat
+        )
+      )
+      if (next) {
+        processingQueued.current.add(targetChatId)
+        void handleSendMessage(next.content, next.tool, next.provider, next.model, next.attachments)
+      }
     }
   }
 

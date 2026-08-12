@@ -498,7 +498,10 @@ async def send_message_stream(sid: str, body: Message):
         async with lock:
             try:
                 async for token in adapter.send_stream(body.prompt, _images(body.images)):
-                    yield f"data: {json.dumps({'text': token})}\n\n"
+                    if isinstance(token, dict):
+                        yield f"data: {json.dumps(token)}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'text': token})}\n\n"
             except Exception as e:
                 yield f"data: {json.dumps({'error': _err_detail(e)})}\n\n"
 

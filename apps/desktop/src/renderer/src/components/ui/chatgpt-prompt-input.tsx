@@ -162,11 +162,7 @@ const SendIcon = (props: React.SVGProps<SVGSVGElement>) => (
     />
   </svg>
 )
-const StopIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" {...props}>
-    <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
-  </svg>
-)
+
 const XIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg
     width="24"
@@ -566,7 +562,7 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
-        if (!isBusy) handleSend()
+        handleSend()
       }
       if (props.onKeyDown) props.onKeyDown(e)
     }
@@ -802,20 +798,16 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={isBusy ? onStop : handleSend}
-                      disabled={!isBusy && !hasValue}
+                      onClick={handleSend}
+                      disabled={!hasValue}
                       className="flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none bg-black text-white hover:bg-black/80 dark:bg-white dark:text-black dark:hover:bg-white/80 disabled:bg-black/20 dark:disabled:bg-[#515151] cursor-pointer"
                     >
-                      {isBusy ? (
-                        <StopIcon className="h-4 w-4" />
-                      ) : (
-                        <SendIcon className="h-4 w-4 text-bold" />
-                      )}
-                      <span className="sr-only">{isBusy ? 'Stop generating' : 'Send message'}</span>
+                      <SendIcon className="h-4 w-4 text-bold" />
+                      <span className="sr-only">{isBusy ? 'Queue message' : 'Send message'}</span>
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="top" showArrow={true}>
-                    <p>{isBusy ? 'Stop' : 'Send'}</p>
+                    <p>{isBusy ? 'Queue message' : 'Send'}</p>
                   </TooltipContent>
                 </Tooltip>
               </div>

@@ -17,7 +17,7 @@ import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai/r
 import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai/task'
 import { Plan, PlanHeader, PlanTitle, PlanTrigger, PlanContent } from '@/components/ai/plan'
 import { Sources, SourcesTrigger, SourcesContent, Source } from '@/components/ai/sources'
-import { getLocalModels, getProviderSettings, type ProviderSettingsMap } from '@/lib/api'
+import { getLocalModels, getProviderSettings, type MemoryRecall, type ProviderSettingsMap } from '@/lib/api'
 import ThemeSwitch from '@/components/ui/theme-switch'
 import geminiLogo from '@/assets/icon/gemini.svg'
 import openaiLogo from '@/assets/icon/openai.svg'
@@ -45,6 +45,7 @@ export interface Message {
   provider?: string
   /** Concrete model selected within a provider (primarily local servers). */
   model?: string
+  memory?: MemoryRecall
   latencyMs?: number
   /** Marks a just-arrived assistant reply so ChatArea typewriter-reveals it
    * once; historical messages (loaded, not freshly received) render instantly. */
@@ -75,6 +76,8 @@ export interface Chat {
   sessionId: string | null
   threadId: string | null
   isSending?: boolean
+  /** Messages accepted while a response is in progress. */
+  queuedCount?: number
   /** The in-flight request is generating an image -- shows a 4:3 skeleton
    * instead of the text "Thinking..." indicator while isSending is true. */
   isGeneratingImage?: boolean
@@ -129,37 +132,39 @@ const MODELS: ModelOption[] = [
 // Match model IDs returned by local servers (for example `qwen2.5:7b`,
 // `mistralai/Mistral-7B-Instruct`, or `TheBloke/deepseek-coder`). Every
 // distinct model/provider family in public/logos has a corresponding rule.
+const logo = (file: string): string => `${import.meta.env.BASE_URL}logos/${file}`
+
 const LOCAL_MODEL_LOGOS: [RegExp, string][] = [
-  [/\bamp\b/i, '/logos/amp-logo.svg'],
-  [/anthropic/i, '/logos/anthropic.svg'],
-  [/antigravity/i, '/logos/antigravity.svg'],
-  [/claude(?:code)?/i, '/logos/claude.svg'],
-  [/cursor/i, '/logos/cursor.svg'],
-  [/deepseek/i, '/logos/deepseek.svg'],
-  [/factory/i, '/logos/factory.png'],
-  [/gemini/i, '/logos/gemini.svg'],
-  [/gemma/i, '/logos/gemma.png'],
-  [/github/i, '/logos/github.svg'],
-  [/google/i, '/logos/google.svg'],
-  [/hermes/i, '/logos/hermes.png'],
-  [/huggingface|hugging/i, '/logos/huggingface.svg'],
-  [/kilo/i, '/logos/kilo.png'],
-  [/kimi|moonshot/i, '/logos/kimi.png'],
-  [/maincode/i, '/logos/maincode.png'],
-  [/llama|meta-/i, '/logos/meta.svg'],
-  [/mistral|mixtral/i, '/logos/mistral.svg'],
-  [/openclaw/i, '/logos/openclaw.jpeg'],
-  [/opencode/i, '/logos/opencode.svg'],
-  [/perplexity|sonar/i, '/logos/perplexity.svg'],
-  [/qwen/i, '/logos/qwen.svg'],
-  [/gpt|openai/i, '/logos/openai.svg'],
-  [/grok|xai/i, '/logos/xai.svg']
+  [/\bamp\b/i, logo('amp-logo.svg')],
+  [/anthropic/i, logo('anthropic.svg')],
+  [/antigravity/i, logo('antigravity.svg')],
+  [/claude(?:code)?/i, logo('claude.svg')],
+  [/cursor/i, logo('cursor.svg')],
+  [/deepseek/i, logo('deepseek.svg')],
+  [/factory/i, logo('factory.png')],
+  [/gemini/i, logo('gemini.svg')],
+  [/gemma/i, logo('gemma.png')],
+  [/github/i, logo('github.svg')],
+  [/google/i, logo('google.svg')],
+  [/hermes/i, logo('hermes.png')],
+  [/huggingface|hugging/i, logo('huggingface.svg')],
+  [/kilo/i, logo('kilo.png')],
+  [/kimi|moonshot/i, logo('kimi.png')],
+  [/maincode/i, logo('maincode.png')],
+  [/llama|meta-/i, logo('meta.svg')],
+  [/mistral|mixtral/i, logo('mistral.svg')],
+  [/openclaw/i, logo('openclaw.jpeg')],
+  [/opencode/i, logo('opencode.svg')],
+  [/perplexity|sonar/i, logo('perplexity.svg')],
+  [/qwen/i, logo('qwen.svg')],
+  [/gpt|openai/i, logo('openai.svg')],
+  [/grok|xai/i, logo('xai.svg')]
 ]
 
 function localModelLogo(model: string, runtime: string): string | null {
   return (
     LOCAL_MODEL_LOGOS.find(([pattern]) => pattern.test(model))?.[1] ||
-    (runtime === 'ollama' ? '/logos/ollama.svg' : null)
+    (runtime === 'ollama' ? logo('ollama.svg') : null)
   )
 }
 
@@ -213,6 +218,41 @@ const THINKING_VERBS = ['Thinking', 'Reasoning', 'Composing', 'Considering', 'Dr
 /** Collapsible reasoning-trace panel, shown above the reply when a provider
  * supplies one. No adapter populates `thinking` yet -- this stays inert
  * (renders nothing) until reasoning-model streaming is wired up. */
+function MemoryUsed({ memory }: { memory?: MemoryRecall }): React.JSX.Element | null {
+  if (!memory || (!memory.summary && memory.hits.length === 0 && memory.facts.length === 0)) return null
+  return (
+    <details className="mt-3 text-xs text-[#6E6D6A] dark:text-[#9E9D9A]">
+      <summary className="cursor-pointer select-none font-medium">Memory used ({memory.hits.length} recall{memory.hits.length === 1 ? '' : 's'})</summary>
+      <div className="mt-2 space-y-2 rounded-lg bg-[#F1EFEA] dark:bg-[#2C2C2A] p-2.5">
+        {memory.summary && <p>Used this conversation&apos;s rolling summary.</p>}
+        {memory.hits.map((hit, index) => (
+          <p key={`${hit.thread_id}-${index}`} className="line-clamp-3">
+            <span className="font-medium">{Math.round((1 - hit.distance) * 100)}% match:</span> {hit.text}
+          </p>
+        ))}
+        {memory.facts.map((fact) => <p key={fact}>{fact}</p>)}
+      </div>
+    </details>
+  )
+}
+
+function CodeBlockSkeleton({ language }: { language?: string }): React.JSX.Element {
+  return (
+    <div className="my-4 overflow-hidden rounded-xl border border-[#E5E3DF] bg-[#FDFDFB] dark:border-[#2C2C2A] dark:bg-[#1A1A18]">
+      <div className="flex items-center justify-between px-4 pt-3 text-[10px] font-mono text-[#6E6D6A] dark:text-[#9E9D9A]">
+        <span>{language || 'code'}</span>
+        <span className="animate-pulse">Generating code...</span>
+      </div>
+      <div className="space-y-2 px-4 py-4">
+        <div className="h-2 w-11/12 animate-pulse rounded bg-[#EAE8E3] dark:bg-[#2C2C2A]" />
+        <div className="h-2 w-8/12 animate-pulse rounded bg-[#EAE8E3] dark:bg-[#2C2C2A]" />
+        <div className="h-2 w-10/12 animate-pulse rounded bg-[#EAE8E3] dark:bg-[#2C2C2A]" />
+        <div className="h-2 w-6/12 animate-pulse rounded bg-[#EAE8E3] dark:bg-[#2C2C2A]" />
+      </div>
+    </div>
+  )
+}
+
 function ThinkingBlock({ thinking }: { thinking?: string }): React.JSX.Element | null {
   if (!thinking) return null
 
@@ -434,8 +474,11 @@ export default function ChatArea({
   const activeModels = MODELS.filter((m) => providerSettings[m.provider]?.configured).flatMap((option) => {
     if (option.provider !== 'local') return option
     const runtime = providerSettings.local?.runtime || 'local'
-    return localModels.length > 0
-      ? localModels.map((model) => localModelOption(model, runtime))
+    const chatModels = localModels.filter(
+      (model) => !/(embedding|embed-|unlimited-ocr|\bocr\b)/i.test(model)
+    )
+    return chatModels.length > 0
+      ? chatModels.map((model) => localModelOption(model, runtime))
       : [option]
   })
 
@@ -498,7 +541,7 @@ export default function ChatArea({
   }
 
   // Custom typography parser for markdown-like formatting
-  const parseMarkdownContent = (text: string): React.ReactNode[] => {
+  const parseMarkdownContent = (text: string, isStreaming = false): React.ReactNode[] => {
     const lines = text.split('\n')
     let inCodeBlock = false
     let codeBlockLang = ''
@@ -790,6 +833,13 @@ export default function ChatArea({
     })
 
     // Render any remaining list or table
+    // An unfinished fenced block used to disappear until its closing fence
+    // arrived, making code responses look stuck while streaming. Show a stable
+    // placeholder instead, then render the highlighted block once complete.
+    if (inCodeBlock && isStreaming) {
+      renderedNodes.push(<CodeBlockSkeleton key="code-streaming" language={codeBlockLang} />)
+    }
+
     const finalListNode = renderList(`list-final`)
     if (finalListNode) renderedNodes.push(finalListNode)
     const finalTableNode = renderTable(`table-final`)
@@ -809,10 +859,11 @@ export default function ChatArea({
           animate={!!message.isNew}
           isStreaming={isStreaming}
           onDone={() => onMessageRevealed(message.id)}
-          render={parseMarkdownContent}
+          render={(text) => parseMarkdownContent(text, isStreaming)}
         />
       </div>
       <SourcePins sources={message.sources} />
+      <MemoryUsed memory={message.memory} />
       <div className="mt-1.5 flex items-center justify-between">
         <span className="text-[10px] text-[#9E9D9A] dark:text-[#6E6D6A]">
           {typeof message.latencyMs === 'number' ? `${(message.latencyMs / 1000).toFixed(1)}s` : ''}

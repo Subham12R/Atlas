@@ -3,9 +3,9 @@
   "version": "1.0.1",
   "description": "Atlas -- a desktop AI assistant for legal work",
   "main": "./out/main/index.js",
-  "author": "example.com",
+  "author": "Subham12R",
   "license": "MIT",
-  "homepage": "https://electron-vite.org",
+  "homepage": "https://github.com/Subham12R/Atlas",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
@@ -15,11 +15,13 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
+    "build:server": "node scripts/build-server.mjs",
+    "test:backend-port": "node --test test/backend-port.test.mjs",
     "postinstall": "electron-builder install-app-deps",
-    "build:unpack": "npm run build && electron-builder --dir",
-    "build:win": "npm run build && electron-builder --win",
-    "build:mac": "electron-vite build && electron-builder --mac",
-    "build:linux": "electron-vite build && electron-builder --linux"
+    "build:unpack": "npm run build && npm run build:server && electron-builder --dir",
+    "build:win": "npm run build && npm run build:server && electron-builder --win",
+    "build:mac": "npm run build && npm run build:server && electron-builder --mac --arm64",
+    "build:linux": "npm run build && npm run build:server && electron-builder --linux"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

@@ -12,10 +12,8 @@ files:
 asarUnpack:
   - resources/**
 extraResources:
-  - from: resources/server
+  - from: .server-build/dist/atlas-server
     to: server
-    filter:
-      - atlas-server
 win:
   executableName: Atlas
   icon: build/icon.ico
@@ -26,6 +24,9 @@ nsis:
   createDesktopShortcut: always
 mac:
   icon: build/icon.icns
+  identity: "-"
+  hardenedRuntime: false
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
@@ -34,7 +35,7 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${productName}-${version}-macos-arm64.${ext}
 linux:
   target:
     - AppImage
@@ -45,6 +46,3 @@ linux:
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
-publish:
-  provider: generic
-  url: https://example.com/auto-updates

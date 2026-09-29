@@ -1,0 +1,5 @@
+# Local secrets and generated release/build output
+/credentials.db
+/.release-stage/
+/.server-build/
+/.asar-work/

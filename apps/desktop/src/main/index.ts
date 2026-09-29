@@ -224,6 +224,10 @@ async function setChats(chats: unknown[]): Promise<void> {
       body: JSON.stringify(chats)
     })
     if (res.ok) {
+      // Keep a durable fallback snapshot as well. This protects chat history
+      // if the app is closed while the embedded backend is restarting.
+      await mkdir(app.getPath('userData'), { recursive: true })
+      await writeJsonAtomic(chatsPath(), chats)
       return
     }
   } catch (err) {

@@ -173,6 +173,8 @@ function Home(): React.JSX.Element {
     new Map<string, { content: string; tool: string | null; provider: string; model: string | null; attachments: Attachment[] }[]>()
   )
   const processingQueued = useRef(new Set<string>())
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveInFlight = useRef<Promise<void>>(Promise.resolve())
 
   // Restore chat history saved to disk from a previous session.
   useEffect(() => {
@@ -197,14 +199,22 @@ function Home(): React.JSX.Element {
     return () => window.removeEventListener('profile:updated', handleProfileUpdate)
   }, [])
 
-  // Persist on every change, once the initial load has completed -- guards
-  // against the empty initial state overwriting what's on disk.
+  // Streaming updates arrive per token. Debounce and serialize snapshots so
+  // a slow full-library SQLite write cannot race a newer snapshot or make
+  // large chats disappear after a restart.
   useEffect(() => {
-    if (!chatsLoaded || !hasLoadedStoredChats.current) return
-    // Do not replace an existing library with an empty startup snapshot.
-    // New empty chats are still persisted once the user intentionally creates one.
-    if (chats.length === 0) return
-    window.api.setChats(chats)
+    if (!chatsLoaded || !hasLoadedStoredChats.current || chats.length === 0) return
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    const snapshot = chats
+    saveTimer.current = setTimeout(() => {
+      saveInFlight.current = saveInFlight.current
+        .catch(() => {})
+        .then(() => window.api.setChats(snapshot))
+        .catch(() => {})
+    }, 500)
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+    }
   }, [chats, chatsLoaded])
 
   const handleNewChat = (): void => {

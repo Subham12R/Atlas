@@ -107,45 +107,34 @@ def get_chats() -> list[dict]:
 
 def save_chats(chats_data: list[dict]) -> None:
     conn = _connect()
-    conn.execute("DELETE FROM chats")
-    
-    for c in chats_data:
-        conn.execute(
-            "INSERT INTO chats (id, title, is_pinned, timestamp, provider, session_id, thread_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                c["id"],
-                c["title"],
-                1 if c.get("isPinned") else 0,
-                c["timestamp"],
-                c.get("provider"),
-                c.get("sessionId"),
-                c.get("threadId")
-            )
-        )
-        
-        for m in c.get("messages", []):
-            sources_json = json.dumps(m.get("sources")) if m.get("sources") is not None else None
-            attachments_json = json.dumps(m.get("attachments")) if m.get("attachments") is not None else None
-            
+    # Replace the library atomically. Without a transaction, concurrent
+    # renderer saves during streaming can interleave after DELETE FROM chats
+    # and leave only a partial/new chat persisted after a restart.
+    with conn:
+        conn.execute("DELETE FROM chats")
+
+        for c in chats_data:
             conn.execute(
-                "INSERT INTO messages (id, chat_id, sender, content, timestamp, provider, latency_ms, is_new, tool, sources, attachments) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO chats (id, title, is_pinned, timestamp, provider, session_id, thread_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
-                    m["id"],
-                    c["id"],
-                    m["sender"],
-                    m["content"],
-                    m["timestamp"],
-                    m.get("provider"),
-                    m.get("latencyMs"),
-                    1 if m.get("isNew") else 0,
-                    m.get("tool"),
-                    sources_json,
-                    attachments_json
+                    c["id"], c["title"], 1 if c.get("isPinned") else 0,
+                    c["timestamp"], c.get("provider"), c.get("sessionId"), c.get("threadId")
                 )
             )
-    conn.commit()
+
+            for m in c.get("messages", []):
+                sources_json = json.dumps(m.get("sources")) if m.get("sources") is not None else None
+                attachments_json = json.dumps(m.get("attachments")) if m.get("attachments") is not None else None
+                conn.execute(
+                    "INSERT INTO messages (id, chat_id, sender, content, timestamp, provider, latency_ms, is_new, tool, sources, attachments) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        m["id"], c["id"], m["sender"], m["content"], m["timestamp"],
+                        m.get("provider"), m.get("latencyMs"), 1 if m.get("isNew") else 0,
+                        m.get("tool"), sources_json, attachments_json
+                    )
+                )
 
 
 def clear_all() -> None:

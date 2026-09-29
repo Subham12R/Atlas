@@ -5,6 +5,8 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Csv01Icon, File01Icon, SourceCodeIcon } from '@hugeicons/core-free-icons'
 import { ApiError, friendlyErrorMessage, transcribeAudio } from '@/lib/api'
+import { ModeSelector } from '@/components/ModeSelector'
+import type { ExecutionMode } from '@/lib/modes'
 
 // --- Utility Function & Radix Primitives ---
 type ClassValue = string | number | boolean | null | undefined
@@ -404,7 +406,12 @@ export function fileIcon(name: string) {
 }
 
 interface PromptBoxProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
-  onSubmitPrompt?: (text: string, selectedTool: string | null, attachments: Attachment[]) => void
+  onSubmitPrompt?: (
+    text: string,
+    selectedTool: string | null,
+    attachments: Attachment[],
+    mode: ExecutionMode
+  ) => void
   /** A response is currently being generated -- typing stays enabled, but the
    * send button becomes a Stop button instead of being disabled outright. */
   isBusy?: boolean
@@ -419,6 +426,7 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
     const [value, setValue] = React.useState('')
     const [attachments, setAttachments] = React.useState<Attachment[]>([])
     const [selectedTool, setSelectedTool] = React.useState<string | null>(null)
+    const [mode, setMode] = React.useState<ExecutionMode>('auto')
     const [isPopoverOpen, setIsPopoverOpen] = React.useState(false)
     const [expandedImage, setExpandedImage] = React.useState<string | null>(null)
     const [isRecording, setIsRecording] = React.useState(false)
@@ -549,11 +557,12 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
     const handleSend = () => {
       if (!value.trim() && attachments.length === 0) return
       if (onSubmitPrompt) {
-        onSubmitPrompt(value.trim(), selectedTool, attachments)
+        onSubmitPrompt(value.trim(), selectedTool, attachments, mode)
       }
       setValue('')
       setAttachments([])
       setSelectedTool(null)
+      setMode('auto')
       if (internalTextareaRef.current) {
         internalTextareaRef.current.style.height = 'auto'
       }
@@ -740,6 +749,8 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
                   </button>
                 </>
               )}
+
+              <ModeSelector value={mode} onChange={setMode} />
 
               {/* Right-aligned buttons container */}
               <div className="ml-auto flex items-center gap-2">

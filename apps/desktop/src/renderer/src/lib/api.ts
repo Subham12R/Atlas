@@ -1,4 +1,6 @@
 // Thin client for the Atlas FastAPI backend (server/api.py).
+import type { ExecutionMode } from './modes'
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 
 export interface ProviderInfo {
@@ -112,11 +114,12 @@ export function sendMessage(
   sessionId: string,
   prompt: string,
   images?: ImagePayload[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  mode: ExecutionMode = 'auto'
 ): Promise<Reply> {
   return request(`/sessions/${sessionId}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ prompt, images: images?.length ? images : undefined }),
+    body: JSON.stringify({ prompt, images: images?.length ? images : undefined, mode }),
     signal
   })
 }
@@ -133,12 +136,13 @@ export async function sendMessageStream(
   images: { data: string; mime: string }[] | undefined,
   onToken: (token: string) => void,
   onMemory?: (memory: MemoryRecall) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  mode: ExecutionMode = 'auto'
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/sessions/${sessionId}/messages/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, images: images?.length ? images : undefined }),
+    body: JSON.stringify({ prompt, images: images?.length ? images : undefined, mode }),
     signal
   })
 

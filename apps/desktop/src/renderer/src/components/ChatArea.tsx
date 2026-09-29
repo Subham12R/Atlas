@@ -18,6 +18,7 @@ import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai/task'
 import { Plan, PlanHeader, PlanTitle, PlanTrigger, PlanContent } from '@/components/ai/plan'
 import { Sources, SourcesTrigger, SourcesContent, Source } from '@/components/ai/sources'
 import { getLocalModels, getProviderSettings, type MemoryRecall, type ProviderSettingsMap } from '@/lib/api'
+import type { ExecutionMode } from '@/lib/modes'
 import ThemeSwitch from '@/components/ui/theme-switch'
 import geminiLogo from '@/assets/icon/gemini.svg'
 import openaiLogo from '@/assets/icon/openai.svg'
@@ -92,7 +93,8 @@ interface ChatAreaProps {
     tool: string | null,
     provider: string,
     model: string | null,
-    attachments: Attachment[]
+    attachments: Attachment[],
+    mode: ExecutionMode
   ) => void
   onNewChat: () => void
   onTogglePin: (id: string) => void
@@ -535,9 +537,17 @@ export default function ChatArea({
   const handlePromptSubmit = (
     text: string,
     selectedTool: string | null,
-    attachments: Attachment[]
+    attachments: Attachment[],
+    mode: ExecutionMode
   ): void => {
-    onSendMessage(text, selectedTool, selectedModelObj.provider, selectedModelObj.model || null, attachments)
+    onSendMessage(
+      text,
+      selectedTool,
+      selectedModelObj.provider,
+      selectedModelObj.model || null,
+      attachments,
+      mode
+    )
   }
 
   // Custom typography parser for markdown-like formatting

@@ -5,6 +5,7 @@ import Library from '@/components/Library'
 import Profile from '@/components/Profile'
 import Help from '@/components/Help'
 import type { Attachment, FileAttachment } from '@/components/ui/chatgpt-prompt-input'
+import type { ExecutionMode } from '@/lib/modes'
 
 interface UserProfile {
   name: string
@@ -170,7 +171,17 @@ function Home(): React.JSX.Element {
   const activeChat = chats.find((chat) => chat.id === activeChatId) || null
   const abortControllers = useRef(new Map<string, AbortController>())
   const queuedMessages = useRef(
-    new Map<string, { content: string; tool: string | null; provider: string; model: string | null; attachments: Attachment[] }[]>()
+    new Map<
+      string,
+      {
+        content: string
+        tool: string | null
+        provider: string
+        model: string | null
+        attachments: Attachment[]
+        mode: ExecutionMode
+      }[]
+    >()
   )
   const processingQueued = useRef(new Set<string>())
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -281,14 +292,15 @@ function Home(): React.JSX.Element {
     tool: string | null,
     provider: string,
     model: string | null,
-    attachments: Attachment[]
+    attachments: Attachment[],
+    mode: ExecutionMode
   ): Promise<void> => {
     let chatId = activeChatId
     let baseChat = chatId ? chats.find((c) => c.id === chatId) : undefined
 
     if (baseChat?.isSending && chatId && !processingQueued.current.has(chatId)) {
       const queue = queuedMessages.current.get(chatId) || []
-      queue.push({ content, tool, provider, model, attachments })
+      queue.push({ content, tool, provider, model, attachments, mode })
       queuedMessages.current.set(chatId, queue)
       setChats((prev) =>
         prev.map((chat) =>
@@ -561,7 +573,8 @@ function Home(): React.JSX.Element {
           imagePayloads,
           handleStreamToken,
           handleMemoryRecall,
-          controller.signal
+          controller.signal,
+          mode
         )
       } catch (err) {
         if (err instanceof ApiError && err.status === 404) {
@@ -591,7 +604,8 @@ function Home(): React.JSX.Element {
             imagePayloads,
             handleStreamToken,
             handleMemoryRecall,
-            controller.signal
+            controller.signal,
+            mode
           )
         } else {
           throw err
@@ -657,7 +671,14 @@ function Home(): React.JSX.Element {
       )
       if (next) {
         processingQueued.current.add(targetChatId)
-        void handleSendMessage(next.content, next.tool, next.provider, next.model, next.attachments)
+        void handleSendMessage(
+          next.content,
+          next.tool,
+          next.provider,
+          next.model,
+          next.attachments,
+          next.mode
+        )
       }
     }
   }

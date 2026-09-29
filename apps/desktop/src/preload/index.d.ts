@@ -1,4 +1,5 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+import type { LocalRuntimeId, LocalRuntimeStatus } from '../shared/localRuntime'
 
 export interface Profile {
   name: string
@@ -23,6 +24,9 @@ export interface Api {
   setAppPassword: (password: string | null) => Promise<void>
   verifyAppPassword: (password: string) => Promise<boolean>
   getBackendToken: () => Promise<string>
+  getLocalRuntimeStatus: (runtimeId: LocalRuntimeId) => Promise<LocalRuntimeStatus>
+  startLocalRuntime: (runtimeId: LocalRuntimeId) => Promise<LocalRuntimeStatus>
+  stopLocalRuntime: (runtimeId: LocalRuntimeId) => Promise<LocalRuntimeStatus>
   getChats: () => Promise<unknown[]>
   setChats: (chats: unknown[]) => Promise<void>
   minimizeWindow: () => void

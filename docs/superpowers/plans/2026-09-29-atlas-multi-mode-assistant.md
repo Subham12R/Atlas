@@ -319,9 +319,9 @@ class RagMetricTests(TestCase):
 ### Task 5 — Allowlisted local-runtime lifecycle manager
 
 **Files:**
-- Create: `apps/desktop/src/main/localRuntime.ts`
-- Test: `apps/desktop/src/main/localRuntime.test.ts`
-- Modify: `apps/desktop/src/main/index.ts`, `apps/desktop/src/preload/index.ts`, `apps/desktop/src/preload/index.d.ts`, `server/api.py`, `apps/desktop/src/renderer/src/lib/api.ts`, `apps/desktop/src/renderer/src/components/Profile.tsx`
+- Create: `apps/desktop/src/main/localRuntime.ts`, `apps/desktop/src/shared/localRuntime.ts`
+- Test: `apps/desktop/src/main/localRuntime.test.ts`, `apps/desktop/src/renderer/src/components/Profile.test.tsx`
+- Modify: `apps/desktop/src/main/index.ts`, `apps/desktop/src/preload/index.ts`, `apps/desktop/src/preload/index.d.ts`, `apps/desktop/src/renderer/src/components/Profile.tsx`
 
 **Interfaces:**
 - `start(runtimeId)`, `status(runtimeId)`, and `stop(runtimeId)` accept only registered runtime IDs.
@@ -329,15 +329,15 @@ class RagMetricTests(TestCase):
 - Atlas stops only child processes it started; an already-running service is never killed.
 - States are `starting | ready | unavailable | failed`; startup failure does not block cloud/chat use.
 
-**Decision gate:** Confirm runtime/version/OS support. Proposed v1 starts installed Ollama only; keep discovery for other already-running OpenAI-compatible services.
+**Decision gate — approved:** Start an already-installed Ollama binary (version unpinned) on macOS ARM64 only. Keep discovery for other already-running OpenAI-compatible services; do not manage their processes.
 
 **TDD slice — process ownership:**
 
-- [ ] **Step 1: Write failing lifecycle tests before implementation** with a fake process launcher: registered runtime uses fixed arguments and `shell: false`; unknown runtime is rejected; repeated start is idempotent; stop does not kill an externally detected server; missing executable, early exit, and health timeout return explicit bounded failure states.
-- [ ] **Step 2: Run RED.** `cd apps/desktop && npm test -- --run src/main/localRuntime.test.ts`. Mark this test file with the Vitest Node environment. Expected: tests fail because the manager/ownership behavior is missing.
-- [ ] **Step 3: Implement the minimal manager.** Inject the OS process launcher and health probe only at their system boundaries; do not expose `spawn` to the renderer.
-- [ ] **Step 4: Run GREEN.** Rerun the focused test, then `npm run typecheck` and `npm run lint`; manually start/stop only on approved OS/runtime pairs.
-- [ ] **Step 5: Commit.** `git add apps/desktop/src/main/localRuntime.ts apps/desktop/src/main/localRuntime.test.ts apps/desktop/src/main/index.ts apps/desktop/src/preload/index.ts apps/desktop/src/preload/index.d.ts server/api.py apps/desktop/src/renderer/src/lib/api.ts && git commit -m "feat: manage allowlisted local model runtime"` (omit unchanged paths from `git add`).
+- [x] **Step 1: Write failing lifecycle tests before implementation** with a fake process launcher: fixed command/arguments and `shell: false`; unknown runtime rejected; repeated start idempotent; external process never killed; missing executable, early exit, and readiness timeout bounded; shutdown skips probing unless Atlas owns a child. Added Profile-control coverage for explicit start/stop and process ownership.
+- [x] **Step 2: Run RED.** The lifecycle test initially failed because the manager module was absent; the Profile-control test failed because the exported control was absent.
+- [x] **Step 3: Implement the minimal manager.** Main-process IPC validates the renderer frame and fixed runtime ID; the renderer receives no process API.
+- [x] **Step 4: Run GREEN.** The renderer/lifecycle suite, typecheck, and production build pass. Scoped ESLint reports no errors in the runtime/preload/UI additions; repo-wide lint remains blocked by 69 existing errors and 261 warnings. Manual start/stop was not run because `ollama` is not installed in the current environment.
+- [x] **Step 5: Commit.** Stage only this task’s manager, shared contract, IPC, Profile control/tests, and this plan; commit as `feat: manage allowlisted local model runtime`.
 
 **Acceptance:** Only approved installed runtimes start; readiness/failure is visible; arbitrary command text is never executed; Atlas never downloads a model or stops a process it did not start.
 

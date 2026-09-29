@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { LocalRuntimeId, LocalRuntimeStatus } from '../shared/localRuntime'
 
 export interface Profile {
   name: string
@@ -28,6 +29,12 @@ const api = {
   verifyAppPassword: (password: string): Promise<boolean> =>
     ipcRenderer.invoke('verify-app-password', password),
   getBackendToken: (): Promise<string> => ipcRenderer.invoke('get-backend-token'),
+  getLocalRuntimeStatus: (runtimeId: LocalRuntimeId): Promise<LocalRuntimeStatus> =>
+    ipcRenderer.invoke('local-runtime:status', runtimeId),
+  startLocalRuntime: (runtimeId: LocalRuntimeId): Promise<LocalRuntimeStatus> =>
+    ipcRenderer.invoke('local-runtime:start', runtimeId),
+  stopLocalRuntime: (runtimeId: LocalRuntimeId): Promise<LocalRuntimeStatus> =>
+    ipcRenderer.invoke('local-runtime:stop', runtimeId),
   getChats: (): Promise<unknown[]> => ipcRenderer.invoke('get-chats'),
   setChats: (chats: unknown[]): Promise<void> => ipcRenderer.invoke('set-chats', chats),
   minimizeWindow: (): void => ipcRenderer.send('window-minimize'),

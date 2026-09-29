@@ -11,6 +11,7 @@ import {
 import { SunIcon, MoonIcon, MonitorIcon } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
+import type { LocalRuntimeStatus } from '../../../shared/localRuntime'
 import {
   ApiError,
   deleteProviderSettings,
@@ -42,6 +43,107 @@ const LOCAL_RUNTIME_PRESETS: Record<LocalRuntime, { label: string; baseUrl: stri
   lmstudio: { label: 'LM Studio', baseUrl: 'http://localhost:1234/v1' },
   vllm: { label: 'vLLM', baseUrl: 'http://localhost:8000/v1' },
   local: { label: 'Custom OpenAI-compatible server', baseUrl: '' }
+}
+
+export function LocalRuntimeControl(): React.JSX.Element {
+  const [runtimeStatus, setRuntimeStatus] = useState<LocalRuntimeStatus | null>(null)
+  const [operation, setOperation] = useState<'start' | 'stop' | null>(null)
+
+  useEffect(() => {
+    let active = true
+    window.api.getLocalRuntimeStatus('ollama').then(
+      (status) => {
+        if (active) setRuntimeStatus(status)
+      },
+      (error: unknown) => {
+        if (active) {
+          setRuntimeStatus({
+            runtimeId: 'ollama',
+            state: 'failed',
+            managed: false,
+            supported: false,
+            message: error instanceof Error ? error.message : 'Could not check Ollama status.'
+          })
+        }
+      }
+    )
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const run = async (nextOperation: 'start' | 'stop'): Promise<void> => {
+    setOperation(nextOperation)
+    setRuntimeStatus((current) =>
+      current
+        ? {
+            ...current,
+            state: nextOperation === 'start' ? 'starting' : current.state,
+            message: nextOperation === 'start' ? 'Starting Ollama…' : 'Stopping Ollama…'
+          }
+        : current
+    )
+    try {
+      const status =
+        nextOperation === 'start'
+          ? await window.api.startLocalRuntime('ollama')
+          : await window.api.stopLocalRuntime('ollama')
+      setRuntimeStatus(status)
+    } catch (error) {
+      setRuntimeStatus((current) =>
+        current
+          ? {
+              ...current,
+              state: 'failed',
+              managed: nextOperation === 'stop' ? current.managed : false,
+              message: error instanceof Error ? error.message : 'Ollama operation failed.'
+            }
+          : current
+      )
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const managed = runtimeStatus?.managed === true
+  const disabled =
+    !runtimeStatus ||
+    !runtimeStatus.supported ||
+    operation !== null ||
+    (runtimeStatus.state === 'ready' && !runtimeStatus.managed)
+  const label = !runtimeStatus
+    ? 'Checking Ollama…'
+    : !runtimeStatus.supported
+      ? 'Runtime management unavailable'
+      : operation === 'start'
+        ? 'Starting Ollama…'
+        : operation === 'stop'
+          ? 'Stopping Ollama…'
+          : managed
+            ? 'Stop Ollama'
+            : runtimeStatus.state === 'ready'
+              ? 'Ollama is already running'
+              : 'Start Ollama'
+
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-[#E5E3DF] dark:border-[#2C2C2A] px-3 py-2">
+      <p
+        aria-live="polite"
+        aria-atomic="true"
+        className="text-[11px] text-[#6E6D6A] dark:text-[#9E9D9A]"
+      >
+        {runtimeStatus?.message ?? 'Checking whether Ollama is available.'}
+      </p>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => void run(managed ? 'stop' : 'start')}
+        className="shrink-0 rounded-md px-3 py-1.5 text-xs font-semibold text-[#2E2E2D] dark:text-[#EAE8E3] hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] disabled:opacity-50"
+      >
+        {label}
+      </button>
+    </div>
+  )
 }
 
 interface ProfileProps {
@@ -782,6 +884,7 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                   <h3 className="text-xs font-semibold text-[#2E2E2D] dark:text-[#EAE8E3]">
                     Local LLM
                   </h3>
+                  {localRuntime === 'ollama' && <LocalRuntimeControl />}
                   <p className="text-[11px] text-[#6E6D6A] dark:text-[#9E9D9A] leading-relaxed">
                     Connect any OpenAI-compatible local server. Ollama (default), LM Studio, and
                     vLLM are detected automatically; available models are fetched from its{' '}

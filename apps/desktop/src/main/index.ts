@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, type IpcMainInvokeEvent } from 'electron'
 import { spawn, type ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
@@ -8,6 +8,7 @@ import { tmpdir } from 'os'
 import { randomBytes, randomUUID } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { checkOllamaHealth, createLocalRuntimeManager } from './localRuntime'
 
 interface ExportPdfResult {
   ok: boolean
@@ -114,6 +115,21 @@ const BACKEND_URL = 'http://127.0.0.1:8000'
 const BACKEND_TOKEN = is.dev ? process.env.ATLAS_API_TOKEN || '' : randomBytes(32).toString('hex')
 const backendHeaders = { Authorization: `Bearer ${BACKEND_TOKEN}` }
 let backendProcess: ChildProcess | null = null
+const localRuntime = createLocalRuntimeManager({
+  platform: process.platform,
+  arch: process.arch,
+  launch: (command, args, options) => spawn(command, args, options),
+  healthCheck: checkOllamaHealth,
+  delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now: Date.now
+})
+
+function assertTrustedMainFrame(event: IpcMainInvokeEvent): void {
+  const window = BrowserWindow.fromWebContents(event.sender)
+  if (!window || event.senderFrame !== window.webContents.mainFrame) {
+    throw new Error('Unauthorized frame')
+  }
+}
 
 async function waitForBackend(timeoutMs = 10_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
@@ -465,12 +481,21 @@ app.whenReady().then(async () => {
   ipcMain.handle('set-app-password', (_event, password: string | null) => setAppPassword(password))
   ipcMain.handle('verify-app-password', (_event, password: string) => verifyAppPassword(password))
   ipcMain.handle('get-backend-token', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    if (!win || event.senderFrame !== win.webContents.mainFrame) {
-      throw new Error('Unauthorized frame')
-    }
+    assertTrustedMainFrame(event)
     if (BACKEND_TOKEN.length < 32) throw new Error('ATLAS_API_TOKEN is not configured')
     return BACKEND_TOKEN
+  })
+  ipcMain.handle('local-runtime:status', (event, runtimeId: unknown) => {
+    assertTrustedMainFrame(event)
+    return localRuntime.status(typeof runtimeId === 'string' ? runtimeId : '')
+  })
+  ipcMain.handle('local-runtime:start', (event, runtimeId: unknown) => {
+    assertTrustedMainFrame(event)
+    return localRuntime.start(typeof runtimeId === 'string' ? runtimeId : '')
+  })
+  ipcMain.handle('local-runtime:stop', (event, runtimeId: unknown) => {
+    assertTrustedMainFrame(event)
+    return localRuntime.stop(typeof runtimeId === 'string' ? runtimeId : '')
   })
   ipcMain.handle('get-chats', () => getChats())
   ipcMain.handle('set-chats', (_event, chats: unknown[]) => setChats(chats))
@@ -517,7 +542,27 @@ app.whenReady().then(async () => {
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
-app.on('before-quit', stopEmbeddedBackend)
+let quittingAfterRuntimeCleanup = false
+app.on('before-quit', (event) => {
+  if (quittingAfterRuntimeCleanup) {
+    stopEmbeddedBackend()
+    return
+  }
+  event.preventDefault()
+  quittingAfterRuntimeCleanup = true
+  void localRuntime
+    .shutdown()
+    .then((stopped) => {
+      if (!stopped) console.error('Managed Ollama did not exit during app shutdown.')
+    })
+    .catch((error: unknown) => {
+      console.error('Failed to stop managed Ollama during app shutdown.', error)
+    })
+    .finally(() => {
+      stopEmbeddedBackend()
+      app.quit()
+    })
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

@@ -290,6 +290,18 @@ class RagMetricTests(TestCase):
 
 **Acceptance:** Selected documents are searchable with provenance, duplicate ingestion is idempotent, deletion removes results, and any retrieval/chunking change is compared against Task 3’s baseline.
 
+### Task 4a — Composer model picker and honest UI references
+
+**Files:** `apps/desktop/src/renderer/src/components/ChatArea.tsx`, `components/ui/chatgpt-prompt-input.tsx`, their existing RTL tests.
+
+**Decision:** Use the screenshot's searchable, upward-opening model picker inside the composer; show connected models only, with generic cloud/local glyphs instead of AI brand logos. Preserve the selected provider/model and mode on submission and across chat changes. Do not label a disconnected model as available.
+
+**TDD slice:** First make `ChatArea.test.tsx` fail: the picker is inside the composer rather than the header; filtering hides nonmatches; selecting a local model sends its actual provider/model; reply avatars contain no brand-logo image. Then implement and rerun all renderer tests, typecheck, and build. Keep the existing local API security boundary unchanged.
+
+**UI references:** https://www.beautifului.dev/ and the supplied Loading State, Thinking, Streaming Text, Approval Card, Tool Chips, Recommendation Card, Context Cards, and Code Block examples are *visual/interaction references*, not working agents or data fixtures. Use actual backend run events, source IDs, approval decisions, and file provenance when later tasks provide them. Do not copy hardcoded example searches, citations, model claims, commands, files, reasoning text, timers pretending work completed, or externally hosted meme video. Loading/failed/empty/cancelled states must be explicit; respect reduced motion and keyboard access.
+
+**Deferred future scope:** `../specs/2026-09-30-unified-model-gateway-billing-design.md` and `2026-09-30-unified-model-gateway-billing.md` preserve the Contabo gateway/Razorpay architecture. Do not add payment or cloud billing work to Tasks 5–11; those gates remain unresolved.
+
 ---
 
 ### Task 5 — Allowlisted local-runtime lifecycle manager

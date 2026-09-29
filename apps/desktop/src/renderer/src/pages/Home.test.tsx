@@ -32,9 +32,8 @@ it('sends the chosen mode on the actual streamed turn request', async () => {
   render(<Home />)
 
   await waitFor(() => expect(screen.getByText('Local model')).toBeTruthy())
-  fireEvent.change(screen.getByRole('combobox', { name: 'Execution mode' }), {
-    target: { value: 'coding' }
-  })
+  fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Auto' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Coding' }))
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), {
     target: { value: 'Write a parser' }
   })

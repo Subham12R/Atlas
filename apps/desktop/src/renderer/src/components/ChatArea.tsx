@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
+import * as Popover from '@radix-ui/react-popover'
+import { Check, ChevronDown, Cloud, Cpu, Search } from 'lucide-react'
 import { HugeiconsIcon } from '@hugeicons/react'
 import {
   SidebarRightIcon,
@@ -26,10 +28,6 @@ import {
 } from '@/lib/api'
 import type { ExecutionMode } from '@/lib/modes'
 import ThemeSwitch from '@/components/ui/theme-switch'
-import geminiLogo from '@/assets/icon/gemini.svg'
-import openaiLogo from '@/assets/icon/openai.svg'
-import claudeLogo from '@/assets/icon/claude.png'
-import openRouterLogo from '@/assets/icon/openrouter.png'
 
 export interface MessageFileAttachment {
   kind: 'file'
@@ -114,67 +112,15 @@ type ModelOption = {
   model?: string
   name: string
   desc: string
-  logo: string | null
 }
 
 const MODELS: ModelOption[] = [
-  { id: 'openai', provider: 'openai', name: 'OpenAI', desc: 'GPT models via official API', logo: openaiLogo },
-  { id: 'anthropic', provider: 'anthropic', name: 'Anthropic', desc: 'Claude models via official API', logo: claudeLogo },
-  { id: 'gemini', provider: 'gemini', name: 'Gemini', desc: 'Google Gemini via official API', logo: geminiLogo },
-  {
-    id: 'openrouter',
-    provider: 'openrouter',
-    name: 'OpenRouter',
-    desc: 'Any model, routed through OpenRouter',
-    logo: openRouterLogo
-  },
-  {
-    id: 'local',
-    provider: 'local',
-    name: 'Local model',
-    desc: 'Ollama, LM Studio, vLLM, or another local server',
-    logo: null
-  }
+  { id: 'openai', provider: 'openai', name: 'OpenAI', desc: 'GPT models via official API' },
+  { id: 'anthropic', provider: 'anthropic', name: 'Anthropic', desc: 'Claude models via official API' },
+  { id: 'gemini', provider: 'gemini', name: 'Gemini', desc: 'Google Gemini via official API' },
+  { id: 'openrouter', provider: 'openrouter', name: 'OpenRouter', desc: 'Any model, routed through OpenRouter' },
+  { id: 'local', provider: 'local', name: 'Local model', desc: 'Ollama, LM Studio, vLLM, or another local server' }
 ]
-
-// Match model IDs returned by local servers (for example `qwen2.5:7b`,
-// `mistralai/Mistral-7B-Instruct`, or `TheBloke/deepseek-coder`). Every
-// distinct model/provider family in public/logos has a corresponding rule.
-const logo = (file: string): string => `${import.meta.env.BASE_URL}logos/${file}`
-
-const LOCAL_MODEL_LOGOS: [RegExp, string][] = [
-  [/\bamp\b/i, logo('amp-logo.svg')],
-  [/anthropic/i, logo('anthropic.svg')],
-  [/antigravity/i, logo('antigravity.svg')],
-  [/claude(?:code)?/i, logo('claude.svg')],
-  [/cursor/i, logo('cursor.svg')],
-  [/deepseek/i, logo('deepseek.svg')],
-  [/factory/i, logo('factory.png')],
-  [/gemini/i, logo('gemini.svg')],
-  [/gemma/i, logo('gemma.png')],
-  [/github/i, logo('github.svg')],
-  [/google/i, logo('google.svg')],
-  [/hermes/i, logo('hermes.png')],
-  [/huggingface|hugging/i, logo('huggingface.svg')],
-  [/kilo/i, logo('kilo.png')],
-  [/kimi|moonshot/i, logo('kimi.png')],
-  [/maincode/i, logo('maincode.png')],
-  [/llama|meta-/i, logo('meta.svg')],
-  [/mistral|mixtral/i, logo('mistral.svg')],
-  [/openclaw/i, logo('openclaw.jpeg')],
-  [/opencode/i, logo('opencode.svg')],
-  [/perplexity|sonar/i, logo('perplexity.svg')],
-  [/qwen/i, logo('qwen.svg')],
-  [/gpt|openai/i, logo('openai.svg')],
-  [/grok|xai/i, logo('xai.svg')]
-]
-
-function localModelLogo(model: string, runtime: string): string | null {
-  return (
-    LOCAL_MODEL_LOGOS.find(([pattern]) => pattern.test(model))?.[1] ||
-    (runtime === 'ollama' ? logo('ollama.svg') : null)
-  )
-}
 
 function localModelOption(model: string, runtime: string = 'local'): ModelOption {
   const runtimeName =
@@ -190,35 +136,8 @@ function localModelOption(model: string, runtime: string = 'local'): ModelOption
     provider: 'local',
     model,
     name: model,
-    desc: `${runtimeName} local model`,
-    logo: localModelLogo(model, runtime)
+    desc: `${runtimeName} local model`
   }
-}
-
-/** Providers without a bundled logo image (OpenRouter, Local) fall back to a
- * simple initials badge instead of an <img>. */
-function ProviderLogo({
-  name,
-  logo,
-  className
-}: {
-  id: string
-  name: string
-  logo: string | null
-  className: string
-}): React.JSX.Element {
-  if (logo) return <img src={logo} alt="" className={cn('object-contain', className)} />
-  return (
-    <div
-      className={cn(
-        'rounded-md bg-[#EAE8E3] dark:bg-[#2C2C2A] text-[#6E6D6A] dark:text-[#9E9D9A] flex items-center justify-center font-semibold text-[9px] shrink-0',
-        className
-      )}
-      title={name}
-    >
-      {name.substring(0, 2).toUpperCase()}
-    </div>
-  )
 }
 
 const THINKING_VERBS = ['Thinking', 'Reasoning', 'Composing', 'Considering', 'Drafting']
@@ -455,6 +374,7 @@ export default function ChatArea({
 }: ChatAreaProps): React.JSX.Element {
   const [selectedModel, setSelectedModel] = useState('openai')
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
+  const [modelFilter, setModelFilter] = useState('')
   const [isExportingPdf, setIsExportingPdf] = useState(false)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [providerSettings, setProviderSettings] = useState<ProviderSettingsMap>({})
@@ -899,16 +819,78 @@ export default function ChatArea({
     </>
   )
 
-  const selectedModelObj = activeModels.find((m) => m.id === effectiveModel) || MODELS[0]
-  const optionForMessage = (provider?: string, model?: string): ModelOption | undefined => {
-    if (provider === 'local') {
-      return (
-        activeModels.find((option) => option.provider === provider && option.model === model) ||
-        localModelOption(model || providerSettings.local?.model || 'Local model', providerSettings.local?.runtime)
-      )
-    }
-    return MODELS.find((option) => option.provider === provider)
-  }
+  const selectedModelObj = activeModels.find((m) => m.id === effectiveModel) || activeModels[0] || MODELS[0]
+  const visibleModels = activeModels.filter((model) =>
+    `${model.name} ${model.desc}`.toLowerCase().includes(modelFilter.trim().toLowerCase())
+  )
+  const modelPicker = (
+    <Popover.Root
+      open={isModelDropdownOpen}
+      onOpenChange={(open) => {
+        setIsModelDropdownOpen(open)
+        if (!open) setModelFilter('')
+      }}
+    >
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          aria-label={`Model: ${activeModels.length ? selectedModelObj.name : 'Choose model'}`}
+          title="Switch model for the next message"
+          className="flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-full border border-[#E5E3DF] px-2.5 text-xs font-medium text-[#2E2E2D] hover:bg-[#F1EFEA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:border-[#4d4d4d] dark:text-[#EAE8E3] dark:hover:bg-[#2C2C2A]"
+        >
+          {activeModels.length > 0 && (selectedModelObj.provider === 'local' ? <Cpu size={14} aria-hidden="true" /> : <Cloud size={14} aria-hidden="true" />)}
+          <span className="truncate">{activeModels.length ? selectedModelObj.name : 'Choose model'}</span>
+          <ChevronDown size={12} aria-hidden="true" />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          side="top"
+          align="end"
+          sideOffset={8}
+          aria-label="Choose model"
+          className="z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-[#E5E3DF] bg-[#FAF9F6] p-2 text-[#2E2E2D] shadow-md outline-none dark:border-[#2C2C2A] dark:bg-[#252523] dark:text-[#EAE8E3] motion-safe:animate-in motion-safe:fade-in"
+        >
+          <p className="px-2 pb-2 text-xs font-medium text-[#6E6D6A] dark:text-[#9E9D9A]">Model</p>
+          <div className="flex items-center gap-2 rounded-lg border border-[#E5E3DF] px-2 dark:border-[#4d4d4d]">
+            <Search size={15} className="shrink-0 text-[#6E6D6A]" aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="Filter models"
+              placeholder="Filter models"
+              value={modelFilter}
+              onChange={(event) => setModelFilter(event.target.value)}
+              className="min-w-0 w-full bg-transparent py-2 text-sm outline-none"
+            />
+          </div>
+          <div className="mt-1 max-h-64 overflow-y-auto">
+            {visibleModels.length > 0 ? visibleModels.map((model) => (
+              <button
+                key={model.id}
+                type="button"
+                aria-label={model.name}
+                aria-pressed={selectedModel === model.id}
+                onClick={() => {
+                  setSelectedModel(model.id)
+                  setIsModelDropdownOpen(false)
+                  setModelFilter('')
+                }}
+                className="flex w-full items-center gap-2 rounded-lg p-2 text-left text-sm hover:bg-[#F1EFEA] focus-visible:outline-2 focus-visible:outline-ring dark:hover:bg-[#2C2C2A]"
+              >
+                {model.provider === 'local' ? <Cpu size={16} aria-hidden="true" /> : <Cloud size={16} aria-hidden="true" />}
+                <span className="min-w-0 flex-1 truncate">{model.name}</span>
+                {selectedModel === model.id && <Check size={14} aria-hidden="true" />}
+              </button>
+            )) : (
+              <p className="p-2 text-xs text-[#6E6D6A] dark:text-[#9E9D9A]">
+                {activeModels.length === 0 ? 'No providers connected — add one in Profile > Advanced.' : 'No matching models.'}
+              </p>
+            )}
+          </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  )
 
   return (
     <main className="flex-1 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#171717] relative overflow-hidden">
@@ -925,69 +907,6 @@ export default function ChatArea({
             </button>
           )}
 
-          {/* Model Selector Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
-              title="Switch model for the next message"
-              className="h-8 px-2 rounded-lg text-sm font-semibold text-[#2E2E2D] dark:text-[#EAE8E3] transition-colors flex items-center gap-1.5 font-sans hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] cursor-pointer"
-            >
-              <ProviderLogo
-                id={selectedModelObj.id}
-                name={selectedModelObj.name}
-                logo={selectedModelObj.logo}
-                className="rounded-sm w-6 h-6"
-              />
-              <span>{selectedModelObj.name}</span>
-              <HugeiconsIcon
-                icon={ArrowDown}
-                size={12}
-                className="text-[#6E6D6A] dark:text-[#9E9D9A]"
-              />
-            </button>
-
-            {isModelDropdownOpen && (
-              <>
-                <div className="fixed inset-0 z-20" onClick={() => setIsModelDropdownOpen(false)} />
-                <div className="absolute left-0 mt-1.5 w-60 rounded-xl border border-[#E5E3DF] dark:border-[#2C2C2A] bg-[#FAF9F6] dark:bg-[#252523] shadow-md p-1.5 z-30 animate-in fade-in slide-in-from-top-1 duration-150">
-                  {activeModels.length === 0 ? (
-                    <p className="p-2 text-xs text-[#6E6D6A] dark:text-[#9E9D9A] leading-relaxed">
-                      No providers connected yet -- add an API key under Profile &gt; Advanced.
-                    </p>
-                  ) : (
-                    activeModels.map((model) => (
-                      <button
-                        key={model.id}
-                        onClick={() => {
-                          setSelectedModel(model.id)
-                          setIsModelDropdownOpen(false)
-                        }}
-                        className={cn(
-                          'w-full text-left p-2 rounded-lg transition-colors cursor-pointer flex items-center gap-2',
-                          selectedModel === model.id
-                            ? 'bg-[#EAE8E3] dark:bg-[#2C2C2A] text-[#2E2E2D] dark:text-[#EAE8E3]'
-                            : 'hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] text-[#6E6D6A] dark:text-[#9E9D9A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3]'
-                        )}
-                      >
-                        <ProviderLogo
-                          id={model.id}
-                          name={model.name}
-                          logo={model.logo}
-                          className="rounded-md shrink-0 w-6 h-6"
-                        />
-                        <div className="flex flex-col gap-0.5">
-                          <span className="text-sm font-semibold">{model.name}</span>
-                          <span className="text-[10px] opacity-80 leading-normal">
-                            {model.desc}
-                          </span>
-                        </div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </>
-            )}
-          </div>
         </div>
 
         {/* Centered Conversation Title */}
@@ -1069,7 +988,7 @@ export default function ChatArea({
 
               {/* Render centered PromptBox when chat has no messages */}
               <div className="w-full max-w-3xl">
-                <PromptBox onSubmitPrompt={handlePromptSubmit} />
+                <PromptBox onSubmitPrompt={handlePromptSubmit} modelPicker={modelPicker} canSend={activeModels.length > 0} />
               </div>
 
               {/* Grid of Starters
@@ -1116,7 +1035,6 @@ export default function ChatArea({
                 return (
                   <>
                     {activeChat.messages.map((message) => {
-                      const respondingModel = optionForMessage(message.provider, message.model)
                       const isStreamingMessage =
                         !!activeChat.isSending &&
                         message.sender === 'assistant' &&
@@ -1137,21 +1055,8 @@ export default function ChatArea({
                           )}
                         >
                           {message.sender === 'assistant' && (
-                            <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 select-none overflow-hidden">
-                              {respondingModel ? (
-                                <ProviderLogo
-                                  id={respondingModel.id}
-                                  name={respondingModel.name}
-                                  logo={respondingModel.logo}
-                                  className="w-6 h-6"
-                                />
-                              ) : (
-                                <HugeiconsIcon
-                                  icon={Message01Icon}
-                                  size={16}
-                                  className="text-[#6E6D6A] dark:text-[#9E9D9A]"
-                                />
-                              )}
+                            <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 select-none">
+                              <HugeiconsIcon icon={Message01Icon} size={16} className="text-[#6E6D6A] dark:text-[#9E9D9A]" />
                             </div>
                           )}
 
@@ -1211,24 +1116,8 @@ export default function ChatArea({
 
                     {showPendingIndicator && (
                       <div className="flex gap-3.5 md:gap-5 pb-4 justify-start">
-                        <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 select-none overflow-hidden">
-                          {(() => {
-                            const pendingModel = optionForMessage(activeChat.provider || undefined, activeChat.model || undefined)
-                            return pendingModel ? (
-                              <ProviderLogo
-                                id={pendingModel.id}
-                                name={pendingModel.name}
-                                logo={pendingModel.logo}
-                                className="w-6 h-6"
-                              />
-                            ) : (
-                              <HugeiconsIcon
-                                icon={Message01Icon}
-                                size={16}
-                                className="text-[#6E6D6A] dark:text-[#9E9D9A]"
-                              />
-                            )
-                          })()}
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 select-none">
+                          <HugeiconsIcon icon={Message01Icon} size={16} className="text-[#6E6D6A] dark:text-[#9E9D9A]" />
                         </div>
                         <div className="flex-1 flex items-center py-2">
                           {activeChat.isGeneratingImage ? (
@@ -1267,6 +1156,8 @@ export default function ChatArea({
           <div className="max-w-3xl mx-auto">
             <PromptBox
               onSubmitPrompt={handlePromptSubmit}
+              modelPicker={modelPicker}
+              canSend={activeModels.length > 0}
               isBusy={activeChat.isSending}
               onStop={() => onStopSending(activeChat.id)}
             />

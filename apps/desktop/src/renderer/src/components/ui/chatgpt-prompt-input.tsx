@@ -416,11 +416,13 @@ interface PromptBoxProps extends React.TextareaHTMLAttributes<HTMLTextAreaElemen
    * send button becomes a Stop button instead of being disabled outright. */
   isBusy?: boolean
   onStop?: () => void
+  modelPicker?: React.ReactNode
+  canSend?: boolean
 }
 
 // --- The Final, Self-Contained PromptBox Component ---
 export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
-  ({ className, onSubmitPrompt, isBusy, onStop, ...props }, ref) => {
+  ({ className, onSubmitPrompt, isBusy, onStop, modelPicker, canSend = true, ...props }, ref) => {
     const internalTextareaRef = React.useRef<HTMLTextAreaElement>(null)
     const fileInputRef = React.useRef<HTMLInputElement>(null)
     const [value, setValue] = React.useState('')
@@ -555,7 +557,7 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
     }
 
     const handleSend = () => {
-      if (!value.trim() && attachments.length === 0) return
+      if (!canSend || (!value.trim() && attachments.length === 0)) return
       if (onSubmitPrompt) {
         onSubmitPrompt(value.trim(), selectedTool, attachments, mode)
       }
@@ -754,6 +756,7 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
 
               {/* Right-aligned buttons container */}
               <div className="ml-auto flex items-center gap-2">
+                {modelPicker}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -810,7 +813,7 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
                     <button
                       type="button"
                       onClick={handleSend}
-                      disabled={!hasValue}
+                      disabled={!hasValue || !canSend}
                       className="flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none bg-black text-white hover:bg-black/80 dark:bg-white dark:text-black dark:hover:bg-white/80 disabled:bg-black/20 dark:disabled:bg-[#515151] cursor-pointer"
                     >
                       <SendIcon className="h-4 w-4 text-bold" />

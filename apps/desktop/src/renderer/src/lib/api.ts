@@ -53,7 +53,29 @@ export function friendlyErrorMessage(err: unknown, fallback: string): string {
   return fallback
 }
 
+async function authHeaders(): Promise<{ Authorization: string }> {
+  const backend = new URL(API_BASE)
+  if (
+    backend.protocol !== 'http:' ||
+    backend.port !== '8000' ||
+    !['127.0.0.1', 'localhost'].includes(backend.hostname)
+  ) {
+    throw new ApiError(403, 'Local API credentials cannot be sent to a non-local backend.')
+  }
+  try {
+    const token = await window.api.getBackendToken()
+    if (token) return { Authorization: `Bearer ${token}` }
+  } catch {
+    // The local backend is unavailable or development authentication is not configured.
+  }
+  throw new ApiError(
+    503,
+    'Local API authentication unavailable; check ATLAS_API_TOKEN in development.'
+  )
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const authorization = await authHeaders()
   let res: Response | undefined
   let lastError: unknown
   // The packaged Electron app may render shortly before its embedded FastAPI
@@ -63,7 +85,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     try {
       res = await fetch(`${API_BASE}${path}`, {
         ...options,
-        headers: { 'Content-Type': 'application/json', ...options.headers }
+        headers: { 'Content-Type': 'application/json', ...options.headers, ...authorization }
       })
       break
     } catch (err) {
@@ -141,7 +163,7 @@ export async function sendMessageStream(
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/sessions/${sessionId}/messages/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
     body: JSON.stringify({ prompt, images: images?.length ? images : undefined, mode }),
     signal
   })
@@ -212,6 +234,36 @@ export function resetSession(sessionId: string): Promise<{ ok: boolean }> {
 
 export function closeSession(sessionId: string): Promise<{ ok: boolean }> {
   return request(`/sessions/${sessionId}`, { method: 'DELETE' })
+}
+
+export interface IndexedDocument {
+  source_id: string
+  name: string
+  byte_size: number
+}
+
+export interface DocumentHit {
+  source_id: string
+  name: string
+  chunk_id: number
+  text: string
+  score: number
+}
+
+export function listDocuments(): Promise<IndexedDocument[]> {
+  return request('/documents')
+}
+
+export function ingestDocument(name: string, text: string): Promise<{ source_id: string }> {
+  return request('/documents', { method: 'POST', body: JSON.stringify({ name, text }) })
+}
+
+export function searchDocuments(query: string): Promise<DocumentHit[]> {
+  return request(`/documents/search?q=${encodeURIComponent(query)}`)
+}
+
+export function deleteDocument(sourceId: string): Promise<void> {
+  return request(`/documents/${encodeURIComponent(sourceId)}`, { method: 'DELETE' })
 }
 
 // ---- provider settings (API keys + local LLM connection) ------------------

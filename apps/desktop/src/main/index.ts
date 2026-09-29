@@ -5,7 +5,7 @@ import { join } from 'path'
 import bcrypt from 'bcryptjs'
 import { writeFile, rm, readFile, mkdir, rename, open } from 'fs/promises'
 import { tmpdir } from 'os'
-import { randomUUID } from 'crypto'
+import { randomBytes, randomUUID } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
@@ -111,13 +111,15 @@ async function saveSession(email: string | null): Promise<void> {
 }
 
 const BACKEND_URL = 'http://127.0.0.1:8000'
+const BACKEND_TOKEN = is.dev ? process.env.ATLAS_API_TOKEN || '' : randomBytes(32).toString('hex')
+const backendHeaders = { Authorization: `Bearer ${BACKEND_TOKEN}` }
 let backendProcess: ChildProcess | null = null
 
 async function waitForBackend(timeoutMs = 10_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${BACKEND_URL}/providers`)
+      const response = await fetch(`${BACKEND_URL}/providers`, { headers: backendHeaders })
       if (response.ok) return true
     } catch {
       // The embedded server is still starting.
@@ -147,7 +149,8 @@ async function startEmbeddedBackend(): Promise<void> {
       ...process.env,
       BRAIN_DB_PATH: join(dataPath, 'brain.db'),
       CHATS_DB_PATH: join(dataPath, 'chats.db'),
-      CREDENTIALS_DB_PATH: join(dataPath, 'credentials.db')
+      CREDENTIALS_DB_PATH: join(dataPath, 'credentials.db'),
+      ATLAS_API_TOKEN: BACKEND_TOKEN
     },
     stdio: ['ignore', log.fd, log.fd]
   })
@@ -176,7 +179,7 @@ async function getChats(): Promise<unknown[]> {
   // that could overwrite the persisted SQLite library.
   for (let attempt = 0; attempt < 10; attempt += 1) {
     try {
-      const res = await fetch(`${BACKEND_URL}/chats`)
+      const res = await fetch(`${BACKEND_URL}/chats`, { headers: backendHeaders })
       if (res.ok) {
         backendChats = (await res.json()) as unknown[]
         fetchFailed = false
@@ -220,7 +223,7 @@ async function setChats(chats: unknown[]): Promise<void> {
   try {
     const res = await fetch(`${BACKEND_URL}/chats`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...backendHeaders },
       body: JSON.stringify(chats)
     })
     if (res.ok) {
@@ -410,7 +413,7 @@ function createWindow(): void {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
-      webSecurity: false
+      webSecurity: true
     }
   })
 
@@ -418,8 +421,12 @@ function createWindow(): void {
     mainWindow.show()
   })
 
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url.split('#')[0] !== mainWindow.webContents.getURL().split('#')[0]) event.preventDefault()
+  })
+
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    if (/^https?:\/\//i.test(details.url)) void shell.openExternal(details.url)
     return { action: 'deny' }
   })
 
@@ -457,6 +464,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('has-app-password', () => hasAppPassword())
   ipcMain.handle('set-app-password', (_event, password: string | null) => setAppPassword(password))
   ipcMain.handle('verify-app-password', (_event, password: string) => verifyAppPassword(password))
+  ipcMain.handle('get-backend-token', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || event.senderFrame !== win.webContents.mainFrame) {
+      throw new Error('Unauthorized frame')
+    }
+    if (BACKEND_TOKEN.length < 32) throw new Error('ATLAS_API_TOKEN is not configured')
+    return BACKEND_TOKEN
+  })
   ipcMain.handle('get-chats', () => getChats())
   ipcMain.handle('set-chats', (_event, chats: unknown[]) => setChats(chats))
   ipcMain.handle('login-user', (_event, email, password) => loginUser(email, password))

@@ -159,6 +159,8 @@ class MemoryStore:
 
     def wipe_all(self) -> None:
         """Delete every row across all tables -- used by full account reset."""
+        self.con.execute("DELETE FROM document_chunks")
+        self.con.execute("DELETE FROM documents")
         self.con.execute("DELETE FROM edges")
         self.con.execute("DELETE FROM entities")
         self.con.execute("DELETE FROM vec_chunks")

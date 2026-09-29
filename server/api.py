@@ -7,8 +7,8 @@ Two ways to talk to a provider:
   * Stateful session:    POST /sessions ...    (keeps multi-turn context)
 
 A stateful session is kept server-side in an in-memory registry and its calls
-are serialized with a per-session lock. This is a single-process PoC store --
-no auth, no persistence.
+are serialized with a per-session lock. HTTP requests require the per-run
+ATLAS_API_TOKEN bearer token; sessions themselves are not persistent.
 
 Run:  uvicorn api:app --reload
 Docs: http://127.0.0.1:8000/docs
@@ -16,15 +16,17 @@ Docs: http://127.0.0.1:8000/docs
 from __future__ import annotations
 
 import asyncio
+import os
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 
 import json
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 import credentials_store
@@ -37,6 +39,7 @@ from factory import (ANON_OK, BRAIN_ENABLED, BRAIN_TOPK, IMAGE_GEN_MODELS,
                      IMAGE_GEN_PROVIDERS, MODELS, PROVIDERS, AuthMissing,
                      build_adapter, build_brain, get_embedder, get_store)
 from policy import ExecutionMode
+from brain.documents import Documents
 
 TAVILY_KEY = "TAVILY_API_KEY"
 GROQ_KEY = "GROQ_API_KEY"
@@ -64,11 +67,29 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Atlas API", version="1.0", lifespan=lifespan)
 
+# Packaged Electron loads file:// (opaque Origin: null); dev Vite uses 5173.
+ALLOWED_ORIGINS = ("null", "http://localhost:5173", "http://127.0.0.1:5173")
+
+
+@app.middleware("http")
+async def require_local_token(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if origin and origin not in ALLOWED_ORIGINS:
+        return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
+    token = os.environ.get("ATLAS_API_TOKEN", "")
+    if len(token) < 32:
+        return JSONResponse({"detail": "Local API authentication is not configured"}, status_code=503)
+    scheme, _, credential = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not secrets.compare_digest(credential, token):
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -102,6 +123,11 @@ class MemorySearch(BaseModel):
     q: str
     k: int = BRAIN_TOPK
     graph: bool = True
+
+
+class DocumentCreate(BaseModel):
+    name: str
+    text: str
 
 
 class ImageGenerate(BaseModel):
@@ -375,7 +401,7 @@ async def transcribe_audio(body: TranscribeRequest):
 
 @app.post("/account/reset")
 async def reset_account():
-    """Wipe all shared server-side state -- saved provider credentials and all
+    """Wipe all shared server-side state -- credentials, document indexes and
     brain memory (threads/messages/chunks/entities/edges). Used when a user
     deletes their account from the desktop app; closes any live sessions
     first, since their state no longer exists after the wipe."""
@@ -387,8 +413,7 @@ async def reset_account():
     SESSIONS.clear()
     credentials_store.clear_all()
     chat_store.clear_all()
-    if BRAIN_ENABLED:
-        get_store().wipe_all()
+    get_store().wipe_all()
     return {"ok": True}
 
 
@@ -525,6 +550,32 @@ async def close_session(sid: str):
     await adapter.close()
     del SESSIONS[sid]
     return {"ok": True}
+
+
+@app.post("/documents", status_code=201)
+def ingest_document(body: DocumentCreate):
+    try:
+        source_id = Documents(get_store().con).ingest_document(body.name, body.text)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"source_id": source_id}
+
+
+@app.get("/documents")
+def list_documents():
+    return Documents(get_store().con).list_documents()
+
+
+@app.get("/documents/search")
+def search_documents(q: str = Query(min_length=1, max_length=512),
+                     limit: int = Query(6, ge=1, le=20)):
+    return Documents(get_store().con).search_documents(q, limit)
+
+
+@app.delete("/documents/{source_id}", status_code=204)
+def delete_document(source_id: str):
+    Documents(get_store().con).delete_document(source_id)
+    return Response(status_code=204)
 
 
 @app.get("/memory/search")

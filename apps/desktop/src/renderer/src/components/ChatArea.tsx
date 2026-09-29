@@ -17,7 +17,13 @@ import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai/r
 import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai/task'
 import { Plan, PlanHeader, PlanTitle, PlanTrigger, PlanContent } from '@/components/ai/plan'
 import { Sources, SourcesTrigger, SourcesContent, Source } from '@/components/ai/sources'
-import { getLocalModels, getProviderSettings, type MemoryRecall, type ProviderSettingsMap } from '@/lib/api'
+import {
+  friendlyErrorMessage,
+  getLocalModels,
+  getProviderSettings,
+  type MemoryRecall,
+  type ProviderSettingsMap
+} from '@/lib/api'
 import type { ExecutionMode } from '@/lib/modes'
 import ThemeSwitch from '@/components/ui/theme-switch'
 import geminiLogo from '@/assets/icon/gemini.svg'
@@ -452,6 +458,7 @@ export default function ChatArea({
   const [isExportingPdf, setIsExportingPdf] = useState(false)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [providerSettings, setProviderSettings] = useState<ProviderSettingsMap>({})
+  const [providerLoadError, setProviderLoadError] = useState('')
   const [localModels, setLocalModels] = useState<string[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -462,8 +469,11 @@ export default function ChatArea({
   useEffect(() => {
     const refresh = (): void => {
       getProviderSettings()
-        .then(setProviderSettings)
-        .catch(() => {})
+        .then((settings) => {
+          setProviderSettings(settings)
+          setProviderLoadError('')
+        })
+        .catch((err) => setProviderLoadError(friendlyErrorMessage(err, 'Local API unavailable.')))
       getLocalModels()
         .then((result) => setLocalModels(result.models))
         .catch(() => setLocalModels([]))
@@ -1033,6 +1043,11 @@ export default function ChatArea({
           </button>
         </div>
       </header>
+      {providerLoadError && (
+        <p role="alert" className="px-4 py-2 text-xs text-red-600">
+          {providerLoadError}
+        </p>
+      )}
 
       {/* Main Messaging Area */}
       <div

@@ -29,6 +29,20 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_thread ON chunks(thread_id);
 
+CREATE TABLE IF NOT EXISTS documents (
+    source_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    UNIQUE(name, content_hash)
+);
+CREATE TABLE IF NOT EXISTS document_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id TEXT NOT NULL REFERENCES documents(source_id),
+    text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_source ON document_chunks(source_id);
+
 CREATE TABLE IF NOT EXISTS entities (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT NOT NULL,

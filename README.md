@@ -378,10 +378,11 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env   # paste at least one provider API key
+$env:ATLAS_API_TOKEN = python -c "import secrets; print(secrets.token_hex(32))"
 uvicorn api:app --reload
 ```
 
-Interactive API docs: http://127.0.0.1:8000/docs
+The API requires `Authorization: Bearer $ATLAS_API_TOKEN` on every route. Start the desktop from an environment with the **same** token; in development, a missing/mismatched token fails closed. The packaged desktop generates a new token for its embedded backend automatically. The interactive `/docs` page is unavailable without authenticated requests.
 
 On first run with the brain enabled, the embedding model (~50 MB) downloads once via `fastembed`, then works offline.
 
@@ -442,7 +443,7 @@ BRAIN_DB_PATH=brain.db
 
 **Never commit `.env`, `brain.db`, `credentials.db`, or `chats.db`.**
 
-The desktop app reads the backend URL from `VITE_API_BASE_URL` (defaults to `http://127.0.0.1:8000`).
+The desktop app reads the backend URL from `VITE_API_BASE_URL` (defaults to `http://127.0.0.1:8000`). For local-token safety, only `http://127.0.0.1:8000` and `http://localhost:8000` are accepted.
 
 ---
 
@@ -528,11 +529,10 @@ No API endpoint changes required.
 
 ## Known limitations
 
-- **Session registry is in-memory and single-process** — live adapter sessions are lost on restart. Durable memory (vectors, graph, messages) persists in `brain.db`, but there is no auth or shared session state. Fine for local use; a hosted deployment needs shared state and access control.
+- **Session registry is in-memory and single-process** — live adapter sessions are lost on restart. Durable memory and indexed documents persist in `brain.db`. A per-run local bearer token is required, but this is not multi-user authentication or a hosted deployment.
 - **Brain memory is single-file SQLite** — not concurrent multi-writer. For scale, swap `MemoryStore` for Postgres + pgvector.
 - **Graph is lightweight** — single-pass triple extraction, no community detection or hierarchical summaries. Summarization costs provider quota and latency per turn (disable with `BRAIN_AUTO_SUMMARY=0`).
-- **No backend auth** — the API is designed for localhost. Do not expose it publicly without adding authentication.
-- **CORS is permissive (`*`)** — dev-only; lock down before any deploy.
+- **Local-only API** — bound to loopback; CORS permits only the packaged Electron opaque origin and dev Vite origins on port 5173. A bearer token protects requests, but do not expose the API publicly or treat the token as multi-user authorization.
 - **Windows + fastembed** — HuggingFace cache may warn about symlink privilege (`WinError 1314`) on first model download. It falls back to copy and works. Enable Developer Mode to silence it.
 
 ---

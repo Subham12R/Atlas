@@ -22,6 +22,7 @@ export interface Api {
   hasAppPassword: () => Promise<boolean>
   setAppPassword: (password: string | null) => Promise<void>
   verifyAppPassword: (password: string) => Promise<boolean>
+  getBackendToken: () => Promise<string>
   getChats: () => Promise<unknown[]>
   setChats: (chats: unknown[]) => Promise<void>
   minimizeWindow: () => void

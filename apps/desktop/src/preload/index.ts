@@ -27,6 +27,7 @@ const api = {
     ipcRenderer.invoke('set-app-password', password),
   verifyAppPassword: (password: string): Promise<boolean> =>
     ipcRenderer.invoke('verify-app-password', password),
+  getBackendToken: (): Promise<string> => ipcRenderer.invoke('get-backend-token'),
   getChats: (): Promise<unknown[]> => ipcRenderer.invoke('get-chats'),
   setChats: (chats: unknown[]): Promise<void> => ipcRenderer.invoke('set-chats', chats),
   minimizeWindow: (): void => ipcRenderer.send('window-minimize'),

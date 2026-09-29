@@ -50,10 +50,11 @@ precedence over `.env` without needing a restart.
 ## Run the HTTP API
 
 ```powershell
+$env:ATLAS_API_TOKEN = python -c "import secrets; print(secrets.token_hex(32))"
 uvicorn api:app --reload
 ```
 
-Interactive docs at http://127.0.0.1:8000/docs.
+Set `ATLAS_API_TOKEN` to a random 32+ character secret before starting uvicorn. Every route (including `/docs`) requires `Authorization: Bearer <token>`; packaged Electron generates and passes a per-run token automatically. Development desktop and server must inherit the same token. CORS permits only the desktop's file origin (`null`) and local Vite on port 5173; localhost access alone is not authorization.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -68,20 +69,28 @@ Interactive docs at http://127.0.0.1:8000/docs.
 | `DELETE` | `/sessions/{id}` | close + drop the session |
 | `GET` | `/memory/search?q=&k=` | plain semantic search across all stored memory |
 | `POST` | `/memory/search` | graph-aware search: vector hits + 1-hop entity facts |
+| `POST` / `GET` | `/documents` | index an explicitly selected UTF-8 .txt/.md file (≤1 MiB), or list indexed sources |
+| `GET` | `/documents/search?q=` | local text match with source ID/name, chunk ID, and score |
+| `DELETE` | `/documents/{source_id}` | remove index entries only; never deletes the original file |
 | `GET` | `/threads/{id}/summary` | a thread's rolling summary |
 | `GET` | `/threads/{id}/graph` | a thread's entity/relation graph |
+
+Documents must be chosen explicitly (no URL or folder ingestion). Uploading the same name and content again returns the same source ID; changed content creates a separate source. Search is local text matching with chunk provenance; documents do not enter chat replies yet and require no embedding model download.
 
 ```bash
 # stateless
 curl -X POST localhost:8000/chat \
+  -H "Authorization: Bearer $ATLAS_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"provider":"openai","prompt":"hello"}'
 
 # stateful
 SID=$(curl -s -X POST localhost:8000/sessions \
+  -H "Authorization: Bearer $ATLAS_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"provider":"openai"}' | jq -r .session_id)
 curl -X POST localhost:8000/sessions/$SID/messages \
+  -H "Authorization: Bearer $ATLAS_API_TOKEN" \
   -H 'Content-Type: application/json' -d '{"prompt":"and now?"}'
 ```
 

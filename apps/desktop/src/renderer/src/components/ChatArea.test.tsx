@@ -4,6 +4,30 @@ import ChatArea from './ChatArea'
 
 afterEach(() => vi.unstubAllGlobals())
 
+it('shows a degraded state when local API authentication is unavailable', async () => {
+  vi.stubGlobal('api', {
+    getBackendToken: async () => {
+      throw new Error('unconfigured')
+    }
+  })
+  render(
+    <ChatArea
+      isSidebarCollapsed={false}
+      setIsSidebarCollapsed={vi.fn()}
+      activeChat={null}
+      onSendMessage={vi.fn()}
+      onNewChat={vi.fn()}
+      onTogglePin={vi.fn()}
+      onMessageRevealed={vi.fn()}
+      onStopSending={vi.fn()}
+    />
+  )
+  expect(await screen.findByRole('alert')).toHaveProperty(
+    'textContent',
+    expect.stringContaining('authentication unavailable')
+  )
+})
+
 it('passes the selected mode and existing prompt fields to its parent', async () => {
   vi.stubGlobal(
     'fetch',
@@ -19,6 +43,7 @@ it('passes the selected mode and existing prompt fields to its parent', async ()
         )
     )
   )
+  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
   const onSendMessage = vi.fn()
   render(
     <ChatArea

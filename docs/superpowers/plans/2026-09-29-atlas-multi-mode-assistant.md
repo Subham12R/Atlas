@@ -302,6 +302,18 @@ class RagMetricTests(TestCase):
 
 **Deferred future scope:** `../specs/2026-09-30-unified-model-gateway-billing-design.md` and `2026-09-30-unified-model-gateway-billing.md` preserve the Contabo gateway/Razorpay architecture. Do not add payment or cloud billing work to Tasks 5–11; those gates remain unresolved.
 
+### Task 4b — Honest pending-response loading state
+
+**Files:** `apps/desktop/src/renderer/src/components/LoadingState.tsx`, `LoadingState.test.tsx`, `ChatArea.tsx`, `ChatArea.test.tsx`, `assets/main.css`.
+
+**TDD slice:** Write a failing component test for a real elapsed timer whose ticks are hidden from assistive-tech announcements and an integration test that shows status only while `isSending` is pending. Replace the rotating invented activity verbs with the supplied pixel grid and existing neutral shimmer; freeze both for reduced-motion users. Run focused tests RED/GREEN, all renderer tests, typecheck, and build. No fake tool phases, reasoning trace, third-party video, or background network request.
+
+**Registry reference:** https://www.beautifului.dev/r/loading-state.json and https://github.com/slev12397/beautiful-ui/blob/main/app/globals.css. The registry pulls `foundation.json` (global token overrides, base styles, and `shadow-plugin/unprefixed`), which does not belong in Atlas’s existing Electron theme. Adapt the scoped `pixel-on` keyframes only; do not run `shadcn add` against the app or load its external Surfer video.
+
+**Acceptance:** Pending work shows accurate elapsed time; its indicator disappears when the reply stops pending, and no UI claims an unperformed search or tool call.
+
+**Remaining Beautiful UI test seams:** Task 7 route events enable actual streamed-text/citation display (verified IDs only); Task 8 broker events enable expandable Thinking/Tool Chips and invocation-bound Approval Card; document-to-chat provenance enables Context Cards; an approved proposal/changed-file contract is required before Recommendation Card and diff-mode Code Block. Existing code highlighting and source cards remain in use until real replacements pass behavior tests. No sample rows, animations, or follow-ups may substitute for backend results.
+
 ---
 
 ### Task 5 — Allowlisted local-runtime lifecycle manager

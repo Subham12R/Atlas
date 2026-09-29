@@ -147,6 +147,36 @@
   animation: skeleton-shimmer 1.6s infinite;
 }
 
+@keyframes atlas-pixel-on {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  18%,
+  42% {
+    opacity: 1;
+  }
+  62% {
+    opacity: 0.15;
+  }
+}
+
+.atlas-loading-cell {
+  opacity: 0.15;
+  animation: atlas-pixel-on 650ms ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atlas-loading-cell {
+    animation: none;
+  }
+  .shimmer-text {
+    animation: none;
+    background-image: none;
+    color: var(--foreground);
+  }
+}
+
 .ambient-glow-line {
   background: linear-gradient(
     90deg,

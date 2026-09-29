@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { highlightCode } from '@/lib/highlight'
 import { chatToHtml } from '@/lib/exportHtml'
 import { PromptBox, fileIcon, type Attachment } from '@/components/ui/chatgpt-prompt-input'
+import { LoadingState } from '@/components/LoadingState'
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai/reasoning'
 import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai/task'
 import { Plan, PlanHeader, PlanTitle, PlanTrigger, PlanContent } from '@/components/ai/plan'
@@ -139,8 +140,6 @@ function localModelOption(model: string, runtime: string = 'local'): ModelOption
     desc: `${runtimeName} local model`
   }
 }
-
-const THINKING_VERBS = ['Thinking', 'Reasoning', 'Composing', 'Considering', 'Drafting']
 
 /** Collapsible reasoning-trace panel, shown above the reply when a provider
  * supplies one. No adapter populates `thinking` yet -- this stays inert
@@ -280,19 +279,6 @@ function SourcePins({
       </SourcesContent>
     </Sources>
   )
-}
-
-function ThinkingIndicator(): React.JSX.Element {
-  const [verbIndex, setVerbIndex] = useState(0)
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      setVerbIndex((i) => (i + 1) % THINKING_VERBS.length)
-    }, 1600)
-    return () => clearInterval(id)
-  }, [])
-
-  return <span className="shimmer-text text-sm font-medium">{THINKING_VERBS[verbIndex]}...</span>
 }
 
 /** Reveals `text` a few characters at a time when `animate` is true (skipped
@@ -1125,7 +1111,7 @@ export default function ChatArea({
                               <div className="skeleton-shimmer absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/40 dark:via-white/10 to-transparent" />
                             </div>
                           ) : (
-                            <ThinkingIndicator />
+                            <LoadingState key={activeChat.id} />
                           )}
                         </div>
                       </div>

@@ -216,3 +216,46 @@ it('keeps an unconfigured prompt until a model is connected', async () => {
     'Save this prompt'
   )
 })
+
+it('shows the loading state only while a reply is pending', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof globalThis.fetch>(
+      async (input) =>
+        new Response(
+          JSON.stringify(
+            String(input).endsWith('/settings/providers/local/models')
+              ? { runtime: 'ollama', models: [] }
+              : { local: { configured: true, runtime: 'ollama' } }
+          ),
+          { headers: { 'Content-Type': 'application/json' } }
+        )
+    )
+  )
+  const chat: Chat = {
+    id: 'thread-1',
+    title: 'Test',
+    isPinned: false,
+    timestamp: '',
+    provider: 'local',
+    sessionId: null,
+    threadId: null,
+    isSending: true,
+    messages: [{ id: 'question', sender: 'user', content: 'Hello', timestamp: '' }]
+  }
+  const props = {
+    isSidebarCollapsed: false,
+    setIsSidebarCollapsed: vi.fn(),
+    onSendMessage: vi.fn(),
+    onNewChat: vi.fn(),
+    onTogglePin: vi.fn(),
+    onMessageRevealed: vi.fn(),
+    onStopSending: vi.fn()
+  }
+  const { rerender } = render(<ChatArea {...props} activeChat={chat} />)
+  expect(await screen.findByRole('status', { name: 'Thinking' })).toBeTruthy()
+  rerender(<ChatArea {...props} activeChat={{ ...chat, isSending: false }} />)
+  expect(screen.queryByRole('status', { name: 'Thinking' })).toBeNull()
+})

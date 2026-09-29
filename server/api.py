@@ -36,6 +36,7 @@ from adapters.base import ImageInput
 from factory import (ANON_OK, BRAIN_ENABLED, BRAIN_TOPK, IMAGE_GEN_MODELS,
                      IMAGE_GEN_PROVIDERS, MODELS, PROVIDERS, AuthMissing,
                      build_adapter, build_brain, get_embedder, get_store)
+from policy import ExecutionMode
 
 TAVILY_KEY = "TAVILY_API_KEY"
 GROQ_KEY = "GROQ_API_KEY"
@@ -85,6 +86,7 @@ class ImagePayload(BaseModel):
 class Message(BaseModel):
     prompt: str
     images: list[ImagePayload] | None = None
+    mode: ExecutionMode = ExecutionMode.AUTO
 
 
 class ChatOnce(BaseModel):
@@ -93,6 +95,7 @@ class ChatOnce(BaseModel):
     anonymous: bool = False
     model: str | None = None
     images: list[ImagePayload] | None = None
+    mode: ExecutionMode = ExecutionMode.AUTO
 
 
 class MemorySearch(BaseModel):

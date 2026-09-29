@@ -17,6 +17,7 @@ export interface RegisterProfile {
 
 export interface Api {
   exportPdf: (html: string) => Promise<{ ok: boolean; path?: string; canceled?: boolean }>
+  getBackendUrl: () => Promise<string | null>
   getProfile: () => Promise<Profile>
   setProfile: (profile: Profile) => Promise<void>
   hasAppPassword: () => Promise<boolean>

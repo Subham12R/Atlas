@@ -1,5 +1,6 @@
 // Thin client for the Atlas FastAPI backend (server/api.py).
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+const DEVELOPMENT_API_BASE = import.meta.env.DEV ? import.meta.env.VITE_API_BASE_URL : undefined
+let backendUrlPromise: Promise<string> | undefined
 
 export interface ProviderInfo {
   provider: string
@@ -33,6 +34,15 @@ export class ApiError extends Error {
   }
 }
 
+async function getApiBaseUrl(): Promise<string> {
+  if (DEVELOPMENT_API_BASE) return DEVELOPMENT_API_BASE
+  backendUrlPromise ??= window.api.getBackendUrl().then((url) => {
+    if (!url) throw new ApiError(0, 'The bundled Atlas server is unavailable.')
+    return url
+  })
+  return backendUrlPromise
+}
+
 /** Thrown instead of ApiError when the request was deliberately aborted
  * (e.g. the user clicked Stop) -- callers should treat this as a silent,
  * expected outcome rather than a real failure. */
@@ -52,6 +62,7 @@ export function friendlyErrorMessage(err: unknown, fallback: string): string {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const apiBaseUrl = await getApiBaseUrl()
   let res: Response | undefined
   let lastError: unknown
   // The packaged Electron app may render shortly before its embedded FastAPI
@@ -59,7 +70,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // saved provider settings load automatically on first launch.
   for (let attempt = 0; attempt < 10; attempt += 1) {
     try {
-      res = await fetch(`${API_BASE}${path}`, {
+      res = await fetch(`${apiBaseUrl}${path}`, {
         ...options,
         headers: { 'Content-Type': 'application/json', ...options.headers }
       })
@@ -73,7 +84,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     }
   }
   if (!res) {
-    throw new ApiError(0, lastError ? 'Could not reach the Atlas server. Is it running?' : 'Could not reach the Atlas server.')
+    throw new ApiError(
+      0,
+      lastError
+        ? 'Could not reach the Atlas server. Is it running?'
+        : 'Could not reach the Atlas server.'
+    )
   }
 
   if (!res.ok) {
@@ -135,7 +151,8 @@ export async function sendMessageStream(
   onMemory?: (memory: MemoryRecall) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/sessions/${sessionId}/messages/stream`, {
+  const apiBaseUrl = await getApiBaseUrl()
+  const res = await fetch(`${apiBaseUrl}/sessions/${sessionId}/messages/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt, images: images?.length ? images : undefined }),

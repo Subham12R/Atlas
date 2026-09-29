@@ -5,6 +5,8 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Csv01Icon, File01Icon, SourceCodeIcon } from '@hugeicons/core-free-icons'
 import { ApiError, friendlyErrorMessage, transcribeAudio } from '@/lib/api'
+import { attachmentLimitError } from '@/lib/attachment-limits.mjs'
+import type { DraftKind } from '@/lib/api'
 
 // --- Utility Function & Radix Primitives ---
 type ClassValue = string | number | boolean | null | undefined
@@ -313,17 +315,22 @@ interface ToolItem {
   shortName: string
   icon: (props: React.SVGProps<SVGSVGElement>) => React.JSX.Element
   extra?: string
-  /** Real UI hook for a not-yet-implemented backend capability (Serper web
-   * search, a multi-step research agent, an explicit plan-first mode) --
-   * shown so it's easy to wire up later instead of removed. */
+  /** Keep unfinished capabilities visible but unselectable. */
   disabled?: boolean
 }
 
 const toolsList: ToolItem[] = [
   { id: 'searchWeb', name: 'Web search', shortName: 'Search', icon: GlobeIcon },
   { id: 'writeCode', name: 'Write or code', shortName: 'Write', icon: PencilIcon },
-  { id: 'deepResearch', name: 'Research mode', shortName: 'Research', icon: TelescopeIcon },
-  { id: 'thinkLonger', name: 'Plan mode', shortName: 'Plan', icon: LightbulbIcon }
+  { id: 'draftDocument', name: 'Draft document', shortName: 'Draft', icon: PencilIcon },
+  {
+    id: 'deepResearch',
+    name: 'Research (one web search)',
+    shortName: 'Research',
+    icon: TelescopeIcon
+  },
+  { id: 'thinkLonger', name: 'Plan (written outline)', shortName: 'Plan', icon: LightbulbIcon },
+  { id: 'safeTools', name: 'Use safe tools (read-only)', shortName: 'Tools', icon: Settings2Icon }
 ]
 
 export interface FileAttachment {
@@ -331,6 +338,7 @@ export interface FileAttachment {
   id: string
   name: string
   content: string
+  size: number
 }
 
 export interface ImageAttachment {
@@ -404,26 +412,30 @@ export function fileIcon(name: string) {
 }
 
 interface PromptBoxProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
-  onSubmitPrompt?: (text: string, selectedTool: string | null, attachments: Attachment[]) => void
+  onSubmitPrompt?: (text: string, selectedTool: string | null, attachments: Attachment[], draftKind: DraftKind) => void
   /** A response is currently being generated -- typing stays enabled, but the
    * send button becomes a Stop button instead of being disabled outright. */
   isBusy?: boolean
   onStop?: () => void
+  toolCallsAvailable?: boolean
 }
 
 // --- The Final, Self-Contained PromptBox Component ---
 export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
-  ({ className, onSubmitPrompt, isBusy, onStop, ...props }, ref) => {
+  ({ className, onSubmitPrompt, isBusy, onStop, toolCallsAvailable = false, ...props }, ref) => {
     const internalTextareaRef = React.useRef<HTMLTextAreaElement>(null)
     const fileInputRef = React.useRef<HTMLInputElement>(null)
+    const pendingTextFiles = React.useRef<File[]>([])
     const [value, setValue] = React.useState('')
     const [attachments, setAttachments] = React.useState<Attachment[]>([])
     const [selectedTool, setSelectedTool] = React.useState<string | null>(null)
+    const [draftKind, setDraftKind] = React.useState<DraftKind>('research_brief')
     const [isPopoverOpen, setIsPopoverOpen] = React.useState(false)
     const [expandedImage, setExpandedImage] = React.useState<string | null>(null)
     const [isRecording, setIsRecording] = React.useState(false)
     const [isTranscribing, setIsTranscribing] = React.useState(false)
     const [voiceError, setVoiceError] = React.useState<string | null>(null)
+    const [fileError, setFileError] = React.useState<string | null>(null)
     const mediaRecorderRef = React.useRef<MediaRecorder | null>(null)
     const audioChunksRef = React.useRef<Blob[]>([])
     const baseValueRef = React.useRef('')
@@ -517,6 +529,14 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(event.target.files || [])
+      const selected = files.filter((file) => !file.type.startsWith('image/') && isTextFile(file))
+      const error = attachmentLimitError(selected, [
+        ...attachments.filter((att): att is FileAttachment => att.kind === 'file'),
+        ...pendingTextFiles.current
+      ])
+      setFileError(error)
+      event.target.value = ''
+      if (error) return
       for (const file of files) {
         const id = crypto.randomUUID()
         if (file.type.startsWith('image/')) {
@@ -529,17 +549,23 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
           }
           reader.readAsDataURL(file)
         } else if (isTextFile(file)) {
+          pendingTextFiles.current.push(file)
           const reader = new FileReader()
           reader.onloadend = () => {
+            pendingTextFiles.current = pendingTextFiles.current.filter((pending) => pending !== file)
+            if (typeof reader.result !== 'string') {
+              setFileError(`Could not read ${file.name}.`)
+              return
+            }
+            const content = reader.result
             setAttachments((prev) => [
               ...prev,
-              { kind: 'file', id, name: file.name, content: reader.result as string }
+              { kind: 'file', id, name: file.name, content, size: file.size }
             ])
           }
           reader.readAsText(file)
         }
       }
-      event.target.value = ''
     }
 
     const handleRemoveAttachment = (id: string) => {
@@ -547,13 +573,19 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
     }
 
     const handleSend = () => {
+      if (pendingTextFiles.current.length > 0) {
+        setFileError('Wait for selected files to finish loading.')
+        return
+      }
       if (!value.trim() && attachments.length === 0) return
       if (onSubmitPrompt) {
-        onSubmitPrompt(value.trim(), selectedTool, attachments)
+        onSubmitPrompt(value.trim(), selectedTool, attachments, draftKind)
       }
       setValue('')
       setAttachments([])
+      setFileError(null)
       setSelectedTool(null)
+      setDraftKind('research_brief')
       if (internalTextareaRef.current) {
         internalTextareaRef.current.style.height = 'auto'
       }
@@ -588,6 +620,7 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
           accept={`image/*,${TEXT_FILE_EXTENSIONS.join(',')}`}
         />
 
+        {fileError && <p role="alert" className="px-2 text-xs text-red-600">{fileError}</p>}
         {attachments.length > 0 && (
           <div className="flex flex-wrap items-end gap-1.5 px-1 pt-1 mb-1">
             {attachments.map((att) =>
@@ -644,6 +677,18 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
           </DialogContent>
         </Dialog>
 
+        {selectedTool === 'draftDocument' && (
+          <label className="flex items-center gap-2 px-2 pb-2 text-xs text-muted-foreground">
+            Template
+            <select value={draftKind} onChange={(event) => setDraftKind(event.target.value as DraftKind)}
+              className="rounded-md border border-border bg-background px-2 py-1 text-foreground">
+              <option value="research_brief">Research brief</option>
+              <option value="comparison">Comparison</option>
+              <option value="decision_memo">Decision memo</option>
+              <option value="readme">README</option>
+            </select>
+          </label>
+        )}
         <textarea
           ref={internalTextareaRef}
           rows={1}
@@ -700,16 +745,16 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
                     {toolsList.map((tool) => (
                       <button
                         key={tool.id}
-                        disabled={tool.disabled}
-                        title={tool.disabled ? 'Coming soon' : undefined}
+                        disabled={tool.disabled || (tool.id === 'safeTools' && !toolCallsAvailable)}
+                        title={tool.id === 'safeTools' && !toolCallsAvailable ? 'Selected provider does not support tool calls' : tool.disabled ? 'Coming soon' : undefined}
                         onClick={() => {
-                          if (tool.disabled) return
+                          if (tool.disabled || (tool.id === 'safeTools' && !toolCallsAvailable)) return
                           setSelectedTool(tool.id)
                           setIsPopoverOpen(false)
                         }}
                         className={cn(
                           'flex w-full items-center gap-2 rounded-md p-2 text-left text-xs text-[#6E6D6A] dark:text-[#9E9D9A]',
-                          tool.disabled
+                          tool.disabled || (tool.id === 'safeTools' && !toolCallsAvailable)
                             ? 'opacity-50 cursor-not-allowed'
                             : 'hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] cursor-pointer hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3]'
                         )}

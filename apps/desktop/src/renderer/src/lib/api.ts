@@ -1,4 +1,5 @@
 // Thin client for the Atlas FastAPI backend (server/api.py).
+import { decodeAgentEvent, type AgentEvent } from './agent-events.mjs'
 const DEVELOPMENT_API_BASE = import.meta.env.DEV ? import.meta.env.VITE_API_BASE_URL : undefined
 let backendUrlPromise: Promise<string> | undefined
 
@@ -6,6 +7,7 @@ export interface ProviderInfo {
   provider: string
   anonymous: boolean
   models: string[]
+  capabilities?: { tool_calls: boolean; streamed_arguments: boolean; tool_models: string[] }
 }
 
 export interface Reply {
@@ -69,6 +71,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // process opens the localhost port. Retry transient connection failures so
   // saved provider settings load automatically on first launch.
   for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (options.signal?.aborted) throw new ApiAborted('request aborted')
     try {
       res = await fetch(`${apiBaseUrl}${path}`, {
         ...options,
@@ -76,13 +79,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       })
       break
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
+      if (options.signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
         throw new ApiAborted('request aborted')
       }
       lastError = err
       await new Promise((resolve) => setTimeout(resolve, 300))
     }
   }
+  if (options.signal?.aborted) throw new ApiAborted('request aborted')
   if (!res) {
     throw new ApiError(
       0,
@@ -219,6 +223,76 @@ export async function sendMessageStream(
   }
 }
 
+export type DraftKind = 'research_brief' | 'comparison' | 'decision_memo' | 'readme'
+
+export interface DraftArtifact {
+  id: string
+  filename: string
+  kind: DraftKind
+}
+
+export interface AgentTurnRequest {
+  prompt: string
+  mode: 'chat' | 'search_web' | 'research' | 'plan' | 'write' | 'draft' | 'tools'
+  draft_kind?: DraftKind
+  instructions?: string
+  images?: ImagePayload[]
+  recent?: { role: 'user' | 'assistant'; content: string }[]
+  attachments?: { id: string; name: string; mime: string; content: string }[]
+}
+
+export async function sendAgentStream(
+  sessionId: string,
+  body: AgentTurnRequest,
+  onEvent: (event: AgentEvent) => void,
+  signal: AbortSignal
+): Promise<void> {
+  const apiBaseUrl = await getApiBaseUrl()
+  if (signal.aborted) throw new ApiAborted('request aborted')
+  const res = await fetch(`${apiBaseUrl}/sessions/${sessionId}/agent/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal
+  })
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const parsed = await res.json()
+      detail = typeof parsed.detail === 'string' ? parsed.detail : detail
+    } catch {
+      // Non-JSON error response.
+    }
+    throw new ApiError(res.status, detail)
+  }
+  const reader = res.body?.getReader()
+  if (!reader) throw new ApiError(502, 'No agent response body')
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let completed = false
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        const event = decodeAgentEvent(line.trim())
+        if (!event) continue
+        if (event.type === 'run.failed') throw new ApiError(502, event.reason || 'Agent run failed')
+        if (event.type === 'run.cancelled') throw new ApiAborted('request aborted')
+        onEvent(event)
+        if (event.type === 'run.completed') completed = true
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  if (signal.aborted) throw new ApiAborted('request aborted')
+  if (!completed) throw new ApiError(502, 'Agent run ended without a result')
+}
+
 export function resetSession(sessionId: string): Promise<{ ok: boolean }> {
   return request(`/sessions/${sessionId}/new_chat`, { method: 'POST' })
 }
@@ -319,9 +393,14 @@ export function deleteSearchSettings(): Promise<{ ok: boolean }> {
   return request('/settings/search', { method: 'DELETE' })
 }
 
-export function webSearch(query: string, maxResults = 5): Promise<{ results: SearchResult[] }> {
+export function webSearch(
+  query: string,
+  maxResults = 5,
+  signal?: AbortSignal
+): Promise<{ results: SearchResult[] }> {
   return request('/websearch', {
     method: 'POST',
+    signal,
     body: JSON.stringify({ query, max_results: maxResults })
   })
 }

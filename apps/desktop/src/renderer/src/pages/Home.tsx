@@ -5,6 +5,7 @@ import Library from '@/components/Library'
 import Profile from '@/components/Profile'
 import Help from '@/components/Help'
 import type { Attachment, FileAttachment } from '@/components/ui/chatgpt-prompt-input'
+import { modeForTool, type AgentEvent } from '@/lib/agent-events.mjs'
 
 interface UserProfile {
   name: string
@@ -23,10 +24,10 @@ import {
   friendlyErrorMessage,
   generateImage,
   sendMessageStream,
-  webSearch,
+  sendAgentStream,
+  type DraftKind,
   type ImagePayload,
-  type MemoryRecall,
-  type SearchResult
+  type MemoryRecall
 } from '@/lib/api'
 
 function timestamp(): string {
@@ -45,21 +46,6 @@ function detectImageIntent(content: string): boolean {
   return IMAGE_INTENT_RE.test(content)
 }
 
-function applyTool(content: string, tool: string | null): string {
-  switch (tool) {
-    case 'searchWeb':
-      return `Search the web for current, up-to-date information and use it to answer:\n\n${content}`
-    case 'deepResearch':
-      return `Do deep, thorough research covering multiple angles and sources, then answer:\n\n${content}`
-    case 'writeCode':
-      return `Focus on writing clean, correct, well-structured code for the following:\n\n${content}`
-    case 'thinkLonger':
-      return `Think through this carefully, step by step, before giving your final answer:\n\n${content}`
-    default:
-      return content
-  }
-}
-
 /** Inlines attached text files as fenced blocks after the prompt text -- the
  * only channel a non-vision file's content can reach the model through.
  * Images are handled separately (sent as real vision content, see `images`
@@ -75,20 +61,6 @@ function applyAttachments(content: string, attachments: Attachment[]): string {
 function splitDataUrl(dataUrl: string): { data: string; mime: string } {
   const match = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl)
   return match ? { mime: match[1], data: match[2] } : { mime: 'image/png', data: '' }
-}
-
-/** Folds real Tavily search results into the prompt -- the model answers
- * from these directly, and the same results become the source pins shown
- * under the reply (see Message.sources in ChatArea.tsx). */
-function buildSearchContext(results: SearchResult[]): string {
-  if (results.length === 0) return ''
-  const lines = results
-    .map((r, i) => `[${i + 1}] ${r.title}\n${r.content}\nSource: ${r.url}`)
-    .join('\n\n')
-  return (
-    `[Web search results]\n${lines}\n\n` +
-    `Using the search results above, answer the user's question that follows.\n\n`
-  )
 }
 
 /** Last 2 exchanges (up to 4 messages) of the chat so far, handed to a newly
@@ -170,7 +142,7 @@ function Home(): React.JSX.Element {
   const activeChat = chats.find((chat) => chat.id === activeChatId) || null
   const abortControllers = useRef(new Map<string, AbortController>())
   const queuedMessages = useRef(
-    new Map<string, { content: string; tool: string | null; provider: string; model: string | null; attachments: Attachment[] }[]>()
+    new Map<string, { content: string; tool: string | null; provider: string; model: string | null; attachments: Attachment[]; draftKind: DraftKind }[]>()
   )
   const processingQueued = useRef(new Set<string>())
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -281,14 +253,15 @@ function Home(): React.JSX.Element {
     tool: string | null,
     provider: string,
     model: string | null,
-    attachments: Attachment[]
+    attachments: Attachment[],
+    draftKind: DraftKind = 'research_brief'
   ): Promise<void> => {
     let chatId = activeChatId
     let baseChat = chatId ? chats.find((c) => c.id === chatId) : undefined
 
     if (baseChat?.isSending && chatId && !processingQueued.current.has(chatId)) {
       const queue = queuedMessages.current.get(chatId) || []
-      queue.push({ content, tool, provider, model, attachments })
+      queue.push({ content, tool, provider, model, attachments, draftKind })
       queuedMessages.current.set(chatId, queue)
       setChats((prev) =>
         prev.map((chat) =>
@@ -469,19 +442,8 @@ function Home(): React.JSX.Element {
         chatModel = model
       }
 
-      // Research mode is the same real search, just cast a wider net --
-      // more results to synthesize from, no separate multi-step agent.
-      let searchResults: SearchResult[] = []
-      if (resolvedTool === 'searchWeb' || resolvedTool === 'deepResearch') {
-        const maxResults = resolvedTool === 'deepResearch' ? 8 : 5
-        searchResults = (await webSearch(content, maxResults)).results
-      }
-
-      let promptToSend = applyAttachments(applyTool(content, resolvedTool), attachments)
-      promptToSend = buildFormattingRules() + promptToSend
-      if (searchResults.length > 0) {
-        promptToSend = buildSearchContext(searchResults) + promptToSend
-      }
+      const mode = modeForTool(resolvedTool)
+      let promptToSend = buildFormattingRules() + applyAttachments(content, attachments)
       if (profile) {
         promptToSend = buildPersonalizationContext(profile) + promptToSend
       }
@@ -489,8 +451,13 @@ function Home(): React.JSX.Element {
         promptToSend = buildSwitchContext(baseChat.messages) + promptToSend
       }
 
+      if (controller.signal.aborted) throw new ApiAborted('request aborted')
       if (!sessionId) {
         const session = await createSession(chatProvider, false, chatModel)
+        if (controller.signal.aborted) {
+          closeSession(session.session_id).catch(() => {})
+          throw new ApiAborted('request aborted')
+        }
         sessionId = session.session_id
         threadId = session.thread_id
         chatProvider = session.provider
@@ -512,11 +479,7 @@ function Home(): React.JSX.Element {
         provider: chatProvider,
         model: chatModel || undefined,
         isNew: true,
-        tool: resolvedTool || undefined,
-        sources:
-          searchResults.length > 0
-            ? searchResults.map((r) => ({ title: r.title, url: r.url }))
-            : undefined
+        tool: resolvedTool || undefined
       }
 
       setChats((prev) =>
@@ -554,17 +517,84 @@ function Home(): React.JSX.Element {
         )
       }
 
-      try {
-        await sendMessageStream(
-          sessionId,
-          promptToSend,
-          imagePayloads,
-          handleStreamToken,
-          handleMemoryRecall,
-          controller.signal
+      const handleAgentEvent = (event: AgentEvent): void => {
+        if (event.type === 'assistant.delta') {
+          handleStreamToken(event.text)
+          return
+        }
+        setChats((prev) =>
+          prev.map((chat) => {
+            if (chat.id !== targetChatId) return chat
+            return {
+              ...chat,
+              messages: chat.messages.map((message) => {
+                if (message.id !== assistantMsgId) return message
+                if (event.type === 'source.found') {
+                  return {
+                    ...message,
+                    sources: [...(message.sources || []), event.source]
+                  }
+                }
+                if (event.type === 'attachment.found') {
+                  return {
+                    ...message,
+                    attachmentSources: [...(message.attachmentSources || []), event.attachment]
+                  }
+                }
+                if (event.type === 'run.completed') {
+                  return {
+                    ...message,
+                    sources: event.sources || message.sources,
+                    queries: event.queries,
+                    attachmentSources: event.attachments || message.attachmentSources,
+                    draft: event.draft || undefined,
+                    runStatus: event.status,
+                    runPhase: event.reason || undefined
+                  }
+                }
+                if (event.type === 'plan.ready') return { ...message, queries: event.queries, runPhase: 'Searching' }
+                if (event.type === 'plan.degraded') return { ...message, runPhase: 'Planning degraded' }
+                if (event.type === 'tool.started') {
+                  return { ...message, runPhase: event.tool === 'fetch_page' ? 'Reading sources' : 'Searching' }
+                }
+                if (event.type === 'tool.progress') return { ...message, runPhase: event.phase }
+                if (event.type === 'tool.failed') return { ...message, runPhase: event.reason || 'Partial results' }
+                return message
+              })
+            }
+          })
         )
+      }
+
+      try {
+        if (mode !== 'chat') {
+          const recent = baseChat.messages.slice(-4).map((message) => ({
+            role: message.sender,
+            content: message.content.slice(0, 2000)
+          }))
+          await sendAgentStream(sessionId, {
+            prompt: content,
+            mode,
+            draft_kind: mode === 'draft' ? draftKind : undefined,
+            instructions: buildFormattingRules() + (profile ? buildPersonalizationContext(profile) : ''),
+            images: imagePayloads,
+            recent,
+            attachments: attachments
+              .filter((att): att is FileAttachment => att.kind === 'file')
+              .map((att) => ({ id: att.id, name: att.name, mime: 'text/plain', content: att.content }))
+          }, handleAgentEvent, controller.signal)
+        } else {
+          await sendMessageStream(
+            sessionId,
+            promptToSend,
+            imagePayloads,
+            handleStreamToken,
+            handleMemoryRecall,
+            controller.signal
+          )
+        }
       } catch (err) {
-        if (err instanceof ApiError && err.status === 404) {
+        if (mode === 'chat' && err instanceof ApiError && err.status === 404) {
           // session vanished (e.g. server restarted) -- transparently re-create
           const session = await createSession(chatProvider, false, chatModel)
           sessionId = session.session_id
@@ -611,7 +641,7 @@ function Home(): React.JSX.Element {
     } catch (err) {
       // Deliberately stopped by the user -- handleStopSending() already reset
       // isSending, so there's nothing further to do here.
-      if (err instanceof ApiAborted) return
+      if (err instanceof ApiAborted || controller.signal.aborted) return
 
       const detail = friendlyErrorMessage(
         err,
@@ -657,7 +687,7 @@ function Home(): React.JSX.Element {
       )
       if (next) {
         processingQueued.current.add(targetChatId)
-        void handleSendMessage(next.content, next.tool, next.provider, next.model, next.attachments)
+        void handleSendMessage(next.content, next.tool, next.provider, next.model, next.attachments, next.draftKind)
       }
     }
   }

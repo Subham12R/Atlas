@@ -1,3 +1,12 @@
+## Atlas 1.0.5
+
+- **Research keeps the conversation.** Research answers now see the chat's earlier turns, so follow-ups like "and what about the second one?" stay on topic. Search queries still use at most the last few turns, and a bare "do" asks what to search for instead of searching the word.
+- **Optional keyless web search.** Search and Research can use an installed [free-search-mcp](https://github.com/sweetcornna/free-search-mcp) instead of Tavily (`ATLAS_WEB_SEARCH_PROVIDER=free-search-mcp`). Tavily stays the default. Keyless search still sends queries to external search engines, and it is not yet verified inside the packaged app.
+- **New safe tools:** a calculator and a side-by-side source comparison for tool-capable models.
+- **Research digs deeper when evidence is thin**, with one extra bounded search round.
+- **Chat polish:** a new greeting on the empty chat and a styled copy-code button.
+- **Memory works in the downloaded app.** 1.0.4 is the first build made with a Python that can load the memory store's database extension. Earlier downloads (1.0.1) were built without it.
+
 ## Atlas 1.0.4
 
 **Models and routing**

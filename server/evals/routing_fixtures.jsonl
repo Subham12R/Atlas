@@ -1,0 +1,9 @@
+{"fixture_version":1,"id":"code-python","prompt":"Fix this Python function","expected_mode":"coding","expected_degraded":false}
+{"fixture_version":1,"id":"code-parser","prompt":"Debug the parser","expected_mode":"coding","expected_degraded":false}
+{"fixture_version":1,"id":"research-law","prompt":"Research recent case law","expected_mode":"research","expected_degraded":false}
+{"fixture_version":1,"id":"research-sources","prompt":"Find sources for the public statute","expected_mode":"research","expected_degraded":false}
+{"fixture_version":1,"id":"docs-readme","prompt":"Write a README","expected_mode":"documentation","expected_degraded":false}
+{"fixture_version":1,"id":"docs-guide","prompt":"Explain this user guide","expected_mode":"documentation","expected_degraded":false}
+{"fixture_version":1,"id":"smalltalk","prompt":"hello","expected_mode":"documentation","expected_degraded":true}
+{"fixture_version":1,"id":"mixed-signals","prompt":"Debug this evidence parser","expected_mode":"coding","expected_degraded":true}
+{"fixture_version":1,"id":"implicit-research","prompt":"Which court decided the case?","expected_mode":"research","expected_degraded":true}

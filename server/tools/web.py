@@ -172,8 +172,7 @@ def read_page(url: str) -> tuple[str, str, str]:
 
 async def search_web(context: ToolContext, params: SearchInput) -> ToolResult:
     key = credentials_store.get_value('TAVILY_API_KEY')
-    if not key:
-        raise ValueError('no Tavily API key configured')
+    websearch.require_backend(key)
     hits = await websearch.search(key, params.query, params.max_results)
     found = []
     for hit in hits:
@@ -187,7 +186,8 @@ async def search_web(context: ToolContext, params: SearchInput) -> ToolResult:
         sid = f'S{len(web_sources) + 1}'
         record = {'source_id': sid, 'title': hit['title'], 'url': canonical_url,
                   'host': parsed.hostname or '',
-                  'snippet': hit['content'][:2000], 'query': params.query, 'provider': 'tavily'}
+                  'snippet': hit['content'][:2000], 'query': params.query,
+                  'provider': websearch.provider()}
         record.update({key: hit[key] for key in ('published_date', 'score') if key in hit})
         context.sources[sid] = record
         found.append(record)

@@ -1,13 +1,15 @@
 """
-Real internet search for the "Search the web" / "Research mode" tools --
-backed by Tavily's REST API (https://docs.tavily.com/), which is built for
-handing results straight to an LLM (clean title/url/content per result, no
-HTML scraping needed on our end).
+Search/Research transport: Tavily by default, or an explicitly selected
+installed free-search-mcp stdio server. Only normalized public hits cross
+into agent evidence; MCP never becomes a model-granted tool registry.
 """
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import math
+import os
+import shutil
 from urllib.parse import urlsplit
 
 import httpx
@@ -15,19 +17,67 @@ import httpx
 _URL = "https://api.tavily.com/search"
 
 
-async def search(api_key: str, query: str, max_results: int = 5) -> list[dict]:
-    """-> [{"title": ..., "url": ..., "content": ...}, ...]"""
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.post(_URL, json={
-            "api_key": api_key,
-            "query": query,
-            "max_results": max_results,
-        })
-        resp.raise_for_status()
-        data = resp.json()
+class SearchUnavailable(ValueError):
+    pass
+
+
+def provider() -> str:
+    selected = os.environ.get('ATLAS_WEB_SEARCH_PROVIDER', 'tavily')
+    if selected not in ('tavily', 'free-search-mcp'):
+        raise SearchUnavailable('unknown web search provider')
+    return selected
+
+
+def require_backend(api_key: str | None) -> None:
+    if provider() == 'tavily' and not api_key:
+        raise SearchUnavailable('no Tavily API key configured')
+    if provider() == 'free-search-mcp' and not shutil.which('search-mcp'):
+        raise SearchUnavailable('free-search-mcp is not installed (search-mcp executable missing)')
+
+
+async def _free_search(query: str, max_results: int) -> dict:
+    executable = shutil.which('search-mcp')
+    if not executable:
+        raise SearchUnavailable('free-search-mcp is not installed (search-mcp executable missing)')
+    try:
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+    except ImportError as error:
+        raise SearchUnavailable('MCP Python SDK is not installed') from error
+    params = StdioServerParameters(command=executable, args=['--transport', 'stdio'],
+                                   env={'SEARCH_MCP_DOWNLOAD_ENABLED': 'false',
+                                        'SEARCH_MCP_TRANSPORT': 'stdio'})
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool('search', arguments={
+                'query': query, 'max_results': max_results, 'format': 'json'})
+    if result.is_error or not isinstance(result.structured_content, dict):
+        raise SearchUnavailable('free-search-mcp search failed or returned invalid data')
+    return result.structured_content
+
+
+async def search(api_key: str | None, query: str, max_results: int = 5) -> list[dict]:
+    """Return bounded public hits with the same shape for either search backend."""
+    if provider() == 'free-search-mcp':
+        data = await asyncio.wait_for(_free_search(query, max_results), timeout=20)
+    else:
+        require_backend(api_key)
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(_URL, json={
+                "api_key": api_key,
+                "query": query,
+                "max_results": max_results,
+            })
+            resp.raise_for_status()
+            data = resp.json()
+    if not isinstance(data, dict) or not isinstance(data.get('results'), list):
+        raise SearchUnavailable('web search returned invalid data')
+    if provider() == 'free-search-mcp' and not data['results'] and data.get('errors'):
+        raise SearchUnavailable('free-search-mcp search failed')
 
     results = []
-    for hit in data.get("results", []):
+    for hit in data['results'][:max_results]:
         if not isinstance(hit, dict):
             continue
         url = hit.get("url")
@@ -49,7 +99,8 @@ async def search(api_key: str, query: str, max_results: int = 5) -> list[dict]:
         except ValueError:
             continue
         title = hit.get('title') if isinstance(hit.get('title'), str) else ''
-        content = hit.get('content') if isinstance(hit.get('content'), str) else ''
+        raw_content = hit.get('content', hit.get('snippet', ''))
+        content = raw_content if isinstance(raw_content, str) else ''
         result = {'title': title[:500], 'url': url, 'content': content[:2000]}
         published = hit.get('published_date')
         if isinstance(published, str) and len(published) <= 100:

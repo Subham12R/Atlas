@@ -53,7 +53,7 @@ Design goal: **nothing above the adapter layer needs provider-specific SDK logic
 - **Token streaming** — SSE endpoint for live reply rendering in the UI
 - **Vision input** — attach images to prompts (all chat adapters support image input)
 - **Image generation** — OpenAI (`gpt-image-1`) and Gemini (`imagen-4.0-generate-001`) via `POST /images/generate`
-- **Web search** — one bounded Tavily query (up to 5 displayed results) with source IDs, citations, and cancellation
+- **Web search** — one bounded query (Tavily by default; optional installed free-search-mcp), up to 5 displayed results, with source IDs, citations, and cancellation
 - **Research mode** — plans up to 3 queries, keeps 12 unique results, reads at most 3 public pages, and validates citations within a 90-second run; selected text files stay local to that run
 - **Safe tools** — bounded read-only provider tool calls for supported OpenAI, Anthropic, and Gemini models; no shell, arbitrary paths, or code execution
 - **Coding and Documentation text modes; explicit Plan workflow** — affect task framing or produce a visible outline; none alone executes code or writes files
@@ -158,9 +158,9 @@ sequenceDiagram
 
 The current composer selects one intent, mapped to a typed text mode or an explicit workflow action. `Home.tsx` calls Auto routing only for ordinary text chat; selecting Search, Research, Safe Tools, or Draft enters its own server-owned agent workflow instead. The backend owns tool policy, limits, provider calls, and evidence. An Auto classification of "Research" does **not** run Tavily or prove that the answer is researched. Image generation, voice transcription, and Brain memory have separate paths.
 
-### 1. Web search (Tavily)
+### 1. Web search (Tavily by default; optional free-search-mcp)
 
-Selecting **Search** runs one bounded Tavily query (up to 5 results). The backend passes source records as untrusted evidence to the selected model; it does not prepend search output to the user's prompt. Results are scoped to the run, citations use server-issued `[S#]` IDs, and the renderer opens only sources attached to that assistant message. Stop/disconnect cancels the search and prevents synthesis. Search inputs are limited to 1,000 characters; `/websearch` remains a validated compatibility endpoint, but the desktop agent mode uses `/sessions/{id}/agent/stream`.
+Selecting **Search** runs one bounded query through the selected search backend (up to 5 results). The backend passes source records as untrusted evidence to the selected model; it does not prepend search output to the user's prompt. Results are scoped to the run, citations use server-issued `[S#]` IDs, and the renderer opens only sources attached to that assistant message. Stop/disconnect cancels the search and prevents synthesis. Search inputs are limited to 1,000 characters; `/websearch` remains a validated compatibility endpoint, but the desktop agent mode uses `/sessions/{id}/agent/stream`.
 
 ```mermaid
 sequenceDiagram
@@ -436,7 +436,7 @@ LOCAL_LLM_BASE_URL=http://localhost:11434/v1
 LOCAL_LLM_MODEL=llama3.2
 ```
 
-For web search (and research mode), add a Tavily API key in Advanced settings or set `TAVILY_API_KEY` in `.env`.
+For web search (and research mode), add a Tavily API key in Advanced settings or set `TAVILY_API_KEY` in `.env`. Alternatively, [install and select free-search-mcp](server/README.md#web-search-backend) for keyless searches; it still contacts external search engines.
 
 For voice typing, add a Groq API key (from [console.groq.com](https://console.groq.com)) in Advanced settings or set `GROQ_API_KEY` in `.env`.
 
@@ -505,7 +505,7 @@ With the brain enabled, **both** modes write to and recall from global memory. S
 | `POST` | `/sessions/{id}/new_chat` | Reset conversation context |
 | `DELETE` | `/sessions/{id}` | Close and drop session |
 | `POST` | `/images/generate` | Standalone image generation (OpenAI, Gemini) |
-| `POST` | `/websearch` | Validated Tavily compatibility endpoint; desktop modes use the agent stream |
+| `POST` | `/websearch` | Validated search endpoint (Tavily or explicitly selected free-search-mcp); desktop modes use the agent stream |
 | `GET/PUT/DELETE` | `/settings/search` | Tavily API key management |
 | `POST` | `/audio/transcribe` | Voice typing — transcribe recorded audio via Groq Whisper |
 | `GET/PUT/DELETE` | `/settings/voice` | Groq API key management |
@@ -577,7 +577,7 @@ The historical [multi-mode design](docs/superpowers/specs/2026-09-29-atlas-multi
 
 A `v*` tag matching `apps/desktop/package.json` triggers [the macOS ARM64 workflow](.github/workflows/release-macos.yml): offline tests, typecheck, embedded-server build/smoke test, ad-hoc app-signature check, DMG integrity check, and a matching `.sha256` file. See [installation and verification instructions](apps/desktop/RELEASE.md). The checksum detects changed bytes; it is **not** a publisher signature. The app is not Developer ID signed or notarized, so macOS may require Finder’s Control-click → Open flow. The workflow publishes only if its gates pass; a local build or local tag alone does not publish a release.
 
-The `v1.0.2` build predates the fix for explicitly selected cloud models in Auto; `v1.0.4` includes it along with Auto cloud opt-in, reasoning levels, and per-turn conversation context (`v1.0.3` was not published separately). A downloaded DMG contains only the source at its release tag, not later working-tree changes.
+The `v1.0.2` build predates the fix for explicitly selected cloud models in Auto; `v1.0.4` and later include it along with Auto cloud opt-in, reasoning levels, and per-turn conversation context (`v1.0.3` was not published separately). `v1.0.5` adds conversation context to Research answers. A downloaded DMG contains only the source at its release tag, not later working-tree changes.
 
 ## Roadmap vs current build
 

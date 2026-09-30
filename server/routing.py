@@ -38,7 +38,11 @@ def classify_mode(prompt: str, requested: ExecutionMode) -> tuple[ExecutionMode,
     matched = [mode for mode, signal in _SIGNALS if signal.search(prompt)]
     if len(matched) == 1:
         return matched[0], False
-    # ponytail: ambiguous text defaults to documentation; use reviewed fixtures before adding inference.
+    if len(matched) > 1 and ExecutionMode.CODING in matched and re.match(r'\s*debug\b', prompt, re.I):
+        return ExecutionMode.CODING, True
+    if not matched and re.match(r'\s*(?:which|what) court\b', prompt, re.I):
+        return ExecutionMode.RESEARCH, True
+    # ponytail: other ambiguous text defaults to documentation; extend only with reviewed fixtures.
     return ExecutionMode.DOCUMENTATION, True
 
 
@@ -52,7 +56,8 @@ def choose_model(prompt: str, requested: ExecutionMode, candidates: list[ModelCa
         return RouteDecision('no_eligible_model', mode, None, None,
                              'No permitted text model matches the mode and model preference')
     chosen = eligible[0]  # Stable catalog order; no unmeasured quality or price claims.
-    reason = ('low confidence; documentation fallback' if uncertain else
+    reason = ('low confidence; documentation fallback' if uncertain and mode is ExecutionMode.DOCUMENTATION else
+              'low confidence; tentative mode selection' if uncertain else
               'explicit mode' if requested != ExecutionMode.AUTO else 'deterministic text classification')
     return RouteDecision('degraded' if uncertain else 'ready', mode,
                          chosen.provider, chosen.model, reason)

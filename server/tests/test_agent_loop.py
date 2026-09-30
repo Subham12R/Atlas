@@ -65,6 +65,18 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(adapter.messages[1][-1].content)
         self.assertEqual(payload, {'summary': 'ok', 'data': {'result': 'q'}, 'untrusted': False})
 
+    async def test_native_model_can_choose_bounded_calculator(self):
+        adapter = FakeAdapter([AdapterTurn('', (ToolCall('calc1', 'calculator',
+                                 '{"expression":"0.1+0.2"}'),)), AdapterTurn('0.3')])
+        context = self.context()
+        context.allowed_tools = frozenset({'calculator'})
+        events = []
+        answer = await run_tool_loop(adapter, 'What is 0.1 + 0.2?', context, events.append)
+        self.assertEqual(answer, '0.3')
+        result = json.loads(adapter.messages[1][-1].content)
+        self.assertEqual(result['data']['result'], '0.3')
+        self.assertIn('calculator', [e['tool'] for e in events if e['type'] == 'tool.completed'])
+
     async def test_unknown_and_repeated_call_ids_are_rejected(self):
         for calls in ((ToolCall('c1', 'unknown', '{}'),),
                       (ToolCall('c1', 'web_search', '{}'), ToolCall('c1', 'web_search', '{}'))):
@@ -179,6 +191,29 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
                                Writer(), 'fake', None, events.append, asyncio.Event())
             registry.assert_not_called()
         self.assertNotIn('PRIVATE-DO-NOT-SEARCH', str(events))
+
+    async def test_short_do_followup_does_not_search_the_literal_word(self):
+        from tools.contracts import AgentTurnRequest
+        class Writer:
+            async def run_turn(self, *args): return AdapterTurn('Wrong search [S1]')
+        class Registry:
+            def __init__(self): self.calls = []
+            async def run(self, *args, **kwargs):
+                self.calls.append(args)
+                source = {'source_id': 'S1', 'title': 'Wrong DO result',
+                          'url': 'https://example.org/', 'host': 'example.org', 'snippet': 'unrelated'}
+                return ToolResult(summary='found', data={'results': [source]}, source_ids=['S1'])
+        registry = Registry()
+        events = []
+        with patch('agents.runner.default_registry', return_value=registry):
+            await run_selected(AgentTurnRequest(prompt='do', mode='search_web', recent=[
+                {'role': 'user', 'content': 'PRIVATE-DO-NOT-SEARCH'}
+            ]), Writer(), 'fake', None, events.append, asyncio.Event())
+        self.assertEqual(registry.calls, [])
+        reply = next(e['text'] for e in events if e['type'] == 'assistant.delta')
+        self.assertIn('subject', reply.lower())
+        self.assertNotIn('PRIVATE-DO-NOT-SEARCH', str(events))
+        self.assertEqual(next(e['status'] for e in events if e['type'] == 'run.completed'), 'partial')
 
     async def test_search_mode_keeps_issued_citations_and_metadata(self):
         from adapters.base import AdapterTurn

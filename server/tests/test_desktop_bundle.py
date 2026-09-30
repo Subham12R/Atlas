@@ -116,6 +116,18 @@ class EmbeddedServerRuntimeTests(unittest.TestCase):
                             with self.assertRaises(urllib.error.HTTPError) as unauthorized:
                                 urllib.request.urlopen(url, timeout=1)
                             self.assertEqual(unauthorized.exception.code, 401)
+                            # Opens the memory store, which loads sqlite-vec: fails if the
+                            # bundled Python cannot load SQLite extensions (the v1.0.1 build).
+                            documents = urllib.request.Request(
+                                f"http://127.0.0.1:{port}/documents",
+                                headers={"Authorization": f"Bearer {token}"},
+                            )
+                            try:
+                                with urllib.request.urlopen(documents, timeout=10) as response:
+                                    self.assertEqual(json.load(response), [])
+                            except urllib.error.HTTPError as error:
+                                self.fail(f"memory store unavailable ({error.code}): "
+                                          f"{log_path.read_text(errors='replace')}")
                             return
                         except (OSError, urllib.error.URLError):
                             if process.poll() is not None:

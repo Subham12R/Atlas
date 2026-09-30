@@ -13,6 +13,7 @@ from .contracts import ToolContext, ToolResult, ToolRunBudget
 from .web import FetchInput, SearchInput, fetch_page, search_web
 from .local_search import (AttachmentReadInput, AttachmentSearchInput, MemoryInput,
                            memory_search, read_attached_file, search_attached_files)
+from .analysis import CalculatorInput, CompareSourcesInput, calculator, compare_sources
 
 
 class ToolNotFound(ValueError):
@@ -101,5 +102,10 @@ def default_registry() -> ToolRegistry:
                  description='Search text files selected for this turn'),
         ToolSpec(name='read_attached_file', input_model=AttachmentReadInput,
                  handler=read_attached_file, effect='local_read',
-                 description='Read a bounded range of a selected text file')
+                 description='Read a bounded range of a selected text file'),
+        ToolSpec(name='calculator', input_model=CalculatorInput, handler=calculator,
+                 effect='local_read', description='Calculate basic decimal arithmetic'),
+        ToolSpec(name='compare_sources', input_model=CompareSourcesInput,
+                 handler=compare_sources, effect='local_read',
+                 description='Compare excerpts from two or three issued public sources')
     ])

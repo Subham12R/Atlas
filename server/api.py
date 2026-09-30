@@ -41,7 +41,8 @@ from adapters.openai_adapter import OpenAIAdapter, DEFAULT_MODEL as OPENAI_DEFAU
 from adapters.anthropic_adapter import AnthropicAdapter, DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL
 from adapters.gemini_adapter import GeminiAdapter, DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
 from adapters.openrouter_adapter import DEFAULT_MODEL as OPENROUTER_DEFAULT_MODEL
-from tools.contracts import AgentEventAdapter, AgentTurnRequest
+from tools.contracts import (MAX_HISTORY_CHARS, MAX_HISTORY_TURNS, AgentEventAdapter,
+                             AgentTurnRequest, RecentTurn)
 from tools.registry import ToolDenied, ToolNotFound
 from agents.runner import run_selected
 from factory import (ANON_OK, BRAIN_ENABLED, BRAIN_TOPK, IMAGE_GEN_MODELS,
@@ -176,6 +177,8 @@ class SessionCreate(BaseModel):
     provider: str
     anonymous: bool = False
     model: str | None = None
+    # Resume the chat's memory thread instead of starting an empty one.
+    thread_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
 
 
 class ImagePayload(BaseModel):
@@ -188,6 +191,23 @@ class Message(BaseModel):
     images: list[ImagePayload] | None = None
     mode: ExecutionMode = ExecutionMode.AUTO
     reasoning: ReasoningLevel | None = None
+    # The chat's prior turns; when sent, they replace the session's own memory of the chat.
+    history: list[RecentTurn] | None = Field(default=None, max_length=MAX_HISTORY_TURNS)
+
+    @field_validator('history')
+    @classmethod
+    def bounded_history(cls, history):
+        if history and sum(len(turn.content) for turn in history) > MAX_HISTORY_CHARS:
+            raise ValueError('conversation history too long')
+        return history
+
+
+def _prepare_turn(adapter, body: 'Message') -> None:
+    """Apply per-turn settings to the chat writer (never Brain's separate summarizer)."""
+    _set_reasoning(adapter, body.reasoning)
+    if body.history is not None:
+        getattr(adapter, 'adapter', adapter).set_history(
+            [(turn.role, turn.content) for turn in body.history])
 
 
 def _set_reasoning(adapter, level: str | None) -> None:
@@ -304,7 +324,7 @@ async def _discover_local_models(base_url: str) -> list[str]:
     return []
 
 
-def _build(provider: str, anonymous: bool, model: str | None):
+def _build(provider: str, anonymous: bool, model: str | None, thread_id: str | None = None):
     """Validate + build a chat handle, mapping factory errors to HTTP codes.
 
     Returns a memory-backed Brain when BRAIN_ENABLED, else a plain adapter --
@@ -317,7 +337,7 @@ def _build(provider: str, anonymous: bool, model: str | None):
         raise HTTPException(400, f"{provider} has no anonymous mode")
     try:
         if BRAIN_ENABLED:
-            return build_brain(provider, anonymous, model)
+            return build_brain(provider, anonymous, model, thread_id)
         return build_adapter(provider, anonymous, model)
     except AuthMissing as e:
         raise HTTPException(400, str(e))
@@ -625,7 +645,7 @@ async def chat_once(body: ChatOnce):
 @app.post("/sessions", status_code=201)
 async def create_session(body: SessionCreate):
     """Open a persistent, multi-turn session; returns a session_id."""
-    adapter = _build(body.provider, body.anonymous, body.model)
+    adapter = _build(body.provider, body.anonymous, body.model, body.thread_id)
     try:
         await adapter.init()
     except Exception as e:
@@ -655,7 +675,7 @@ async def send_message(sid: str, body: Message):
     adapter, lock = _get(sid)
     _check_auto_session(body.mode, adapter)
     async with lock:
-        _set_reasoning(adapter, body.reasoning)
+        _prepare_turn(adapter, body)
         try:
             reply = await adapter.send(body.prompt, _images(body.images))
         except Exception as e:
@@ -670,7 +690,7 @@ async def send_message_stream(sid: str, body: Message):
 
     async def event_generator():
         async with lock:
-            _set_reasoning(adapter, body.reasoning)
+            _prepare_turn(adapter, body)
             try:
                 async for token in adapter.send_stream(body.prompt, _images(body.images)):
                     if isinstance(token, dict):

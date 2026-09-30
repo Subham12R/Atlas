@@ -61,7 +61,7 @@ class RequestModeTests(TestCase):
         })
         self.assertEqual(body.model_dump(mode="json"), {
             "prompt": "review this", "images": [{"data": "YWJj", "mime": "image/png"}],
-            "mode": "coding", "reasoning": None,
+            "mode": "coding", "reasoning": None, "history": None,
         })
         once = ChatOnce.model_validate({"provider": "local", "prompt": "outline", "mode": "documentation"})
         self.assertEqual(once.mode, ExecutionMode.DOCUMENTATION)

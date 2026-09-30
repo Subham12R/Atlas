@@ -14,7 +14,7 @@ from openai import AsyncOpenAI, BadRequestError
 from reasoning import openai_effort
 
 from .base import (AdapterCapabilities, AdapterEvent, AdapterTurn, BaseAdapter,
-                   ImageInput, Reply, ToolCall, TurnMessage)
+                   ImageInput, Reply, ToolCall, TurnMessage, alternating_turns)
 
 DEFAULT_MODEL = "gpt-4o"
 
@@ -172,3 +172,7 @@ class OpenAIAdapter(BaseAdapter):
 
     async def new_chat(self) -> None:
         self._messages = []
+
+    def set_history(self, turns: list[tuple[str, str]]) -> None:
+        self._messages = [{'role': role, 'content': content}
+                          for role, content in alternating_turns(turns)]

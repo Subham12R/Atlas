@@ -239,6 +239,21 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                                'fake', None, lambda e: None, cancelled=event)
         self.assertEqual(planner.prompts, [])
 
+    def test_planner_json_from_local_models_is_parsed_leniently_but_validated_strictly(self):
+        from agents.research import EvidenceGap, parse_model_json
+        glm = ('\n```json\n{\n    "objective": "Find what Subham builds.",\n    "queries": [\n'
+               '        "Subham Karmakar Subham12R GitHub projects",\n        "Subham12R portfolio"\n    ],\n'
+               '    "freshness needs": "as needed",\n    "source criteria": ["official profiles"]\n}\n```')
+        plan = ResearchPlan.model_validate(parse_model_json(glm, ResearchPlan))
+        self.assertEqual(plan.queries, ['Subham Karmakar Subham12R GitHub projects', 'Subham12R portfolio'])
+        self.assertEqual((plan.freshness, plan.source_criteria), ('as needed', ['official profiles']))
+        prose = 'Sure! Here is the JSON: {"query": null, "reason": "enough evidence"} Hope that helps.'
+        self.assertIsNone(EvidenceGap.model_validate(parse_model_json(prose, EvidenceGap)).query)
+        with self.assertRaises(ValueError):
+            parse_model_json('no json here', ResearchPlan)
+        with self.assertRaises(ValueError):  # Still strict about content.
+            ResearchPlan.model_validate(parse_model_json('{"objective": "x", "queries": []}', ResearchPlan))
+
     def test_citation_formats_local_models_write_are_normalized_to_issued_ids(self):
         ids = {'S1', 'S2', 'A1'}
         for written, expected in (

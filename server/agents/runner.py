@@ -33,6 +33,18 @@ _CONTINUATION = re.compile(
     r'^\s*(?:continue|go on|keep going|carry on|proceed|resume|retry|try again|again|do it|do that|do|'
     r'go ahead|search(?: it| that| again)?|yes|yes please|ok|okay)\s*[.!]*\s*$', re.I)
 
+_PRONOUN = re.compile(r'\b(his|her|their|its|that (?:portfolio|person|paper|article|source|site))\b', re.I)
+# A subject named in the prompt itself (case-sensitive): a capitalized word after the first,
+# a handle like subham12r, or a quoted phrase.
+_NAMED_SUBJECT = re.compile(r'\s[A-Z][a-z]|\b[A-Za-z]+\d+\w*|"[^"]+"')
+_WHO_IS = re.compile(r'\bwho (?:is|was|are) \w', re.I)
+
+
+def _needs_subject(prompt: str) -> bool:
+    """A pronoun with nothing in the prompt it could refer to: ask rather than guess."""
+    return bool(_PRONOUN.search(prompt)) and not (_NAMED_SUBJECT.search(prompt) or _WHO_IS.search(prompt))
+
+
 MODE_TOOLS = {
     'chat': frozenset(), 'search_web': frozenset({'web_search'}),
     'research': frozenset({'web_search', 'fetch_page'}),
@@ -166,9 +178,7 @@ async def run_selected(body: AgentTurnRequest, session_adapter, provider: str,
         raise asyncio.CancelledError()
     # ponytail: ambiguous follow-ups need an explicit subject; never build public queries from private history.
     short_confirmation = bool(_CONTINUATION.match(body.prompt))
-    if body.mode in {'search_web', 'research'} and (short_confirmation or re.search(
-        r'\b(his|her|their|its|that (?:portfolio|person|paper|article|source|site))\b', body.prompt, re.I
-    )):
+    if body.mode in {'search_web', 'research'} and (short_confirmation or _needs_subject(body.prompt)):
         answer = ('What subject should I search for? Please include a name or topic.' if short_confirmation else
                   'Whose information should I search for? Please include the person or organization name.')
         emit({'type': 'run.started', 'run_id': run_id, 'mode': body.mode})

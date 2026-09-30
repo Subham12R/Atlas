@@ -192,6 +192,17 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
             registry.assert_not_called()
         self.assertNotIn('PRIVATE-DO-NOT-SEARCH', str(events))
 
+    def test_pronoun_guard_only_fires_when_the_prompt_names_no_subject(self):
+        from agents.runner import _needs_subject
+        for prompt in ('get me his portfolio and details', 'get me that portfolio',
+                       'what are her latest papers'):
+            self.assertTrue(_needs_subject(prompt), prompt)
+        for prompt in ('Research what Subham Karmakar (Subham12R) builds and his main projects',
+                       'who is subham12r and his projects',
+                       'who is subham karmakar and what are his projects',
+                       'find "Acme Corp" and their filings', 'what is the capital of France'):
+            self.assertFalse(_needs_subject(prompt), prompt)
+
     async def test_bare_continuations_never_search_the_literal_word(self):
         from tools.contracts import AgentTurnRequest
         for prompt in ('continue', 'Try again.', 'go on'):

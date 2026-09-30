@@ -49,19 +49,22 @@ precedence over `.env` without needing a restart.
 
 ## Web search backend
 
-Search and Research use Tavily by default (`TAVILY_API_KEY`). To use the
-[keyless free-search-mcp server](https://github.com/sweetcornna/free-search-mcp)
-instead, install its **0.13.1** executable separately on the backend's PATH
-(e.g. `uv tool install free-search-mcp==0.13.1`), install this server's
-requirements (including the MCP Python client), and start the backend with
-`ATLAS_WEB_SEARCH_PROVIDER=free-search-mcp`. No Tavily key is then required.
-The backend launches only the installed `search-mcp --transport stdio`, calls
-only its JSON `search` tool, disables its download tool, and never runs `uvx`
-or installs a package at request time. A missing executable returns 503 rather
-than silently falling back to Tavily. Search still sends the query to external
-search engines; "keyless" does not mean offline. An installed executable must
-also be discoverable on the packaged app's PATH; packaged use is not yet
-verified.
+Search and Research use Tavily by default (`TAVILY_API_KEY`). For keyless search,
+use **Profile → Advanced → Web search → Set up free search** in the app, or call
+`POST /settings/search/free-search/install`. This runs headless:
+
+1. It installs the pinned [free-search-mcp](https://github.com/sweetcornna/free-search-mcp) **0.13.1** with
+   `uv tool install`. If `uv` is missing, it is first installed from its official installer without editing
+   shell profiles.
+2. It runs one test search, which also absorbs the tool's first-launch cold start.
+3. It saves `free-search-mcp` as the provider only if that search succeeds.
+
+`PUT /settings/search/provider` switches back to Tavily, and `ATLAS_WEB_SEARCH_PROVIDER` overrides the saved choice.
+
+The backend finds `search-mcp` in `~/.local/bin`, Homebrew and `/usr/local/bin`, so it works from a Finder-launched
+app. It launches only the installed `search-mcp --transport stdio`, calls only its JSON `search` tool, disables its
+download tool, uses strict SafeSearch, and never installs anything at search time. A missing executable returns 503
+rather than silently falling back to Tavily. Keyless does not mean offline: queries still go to external search engines.
 
 ## Run the HTTP API
 

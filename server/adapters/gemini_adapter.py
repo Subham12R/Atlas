@@ -11,7 +11,7 @@ from google.genai import types
 from reasoning import gemini_thinking
 
 from .base import (AdapterCapabilities, AdapterTurn, BaseAdapter, ImageInput,
-                   Reply, ToolCall, TurnMessage)
+                   Reply, ToolCall, TurnMessage, alternating_turns)
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 
@@ -129,3 +129,9 @@ class GeminiAdapter(BaseAdapter):
 
     async def new_chat(self) -> None:
         self._chat = self._client.aio.chats.create(model=self.model)
+
+    def set_history(self, turns: list[tuple[str, str]]) -> None:
+        history = [types.Content(role='model' if role == 'assistant' else 'user',
+                                 parts=[types.Part.from_text(text=content)])
+                   for role, content in alternating_turns(turns)]
+        self._chat = self._client.aio.chats.create(model=self.model, history=history)

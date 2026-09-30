@@ -1,7 +1,10 @@
 // Thin client for the Atlas FastAPI backend (server/api.py).
 import type { ExecutionMode } from './modes'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+const DEVELOPMENT_API_BASE = import.meta.env.DEV
+  ? import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+  : undefined
+let backendUrlPromise: Promise<string> | undefined
 
 export interface ProviderInfo {
   provider: string
@@ -35,6 +38,15 @@ export class ApiError extends Error {
   }
 }
 
+async function getApiBaseUrl(): Promise<string> {
+  if (DEVELOPMENT_API_BASE) return DEVELOPMENT_API_BASE
+  backendUrlPromise ??= window.api.getBackendUrl().then((url) => {
+    if (!url) throw new ApiError(0, 'The bundled Atlas server is unavailable.')
+    return url
+  })
+  return backendUrlPromise
+}
+
 /** Thrown instead of ApiError when the request was deliberately aborted
  * (e.g. the user clicked Stop) -- callers should treat this as a silent,
  * expected outcome rather than a real failure. */
@@ -53,13 +65,24 @@ export function friendlyErrorMessage(err: unknown, fallback: string): string {
   return fallback
 }
 
-async function authHeaders(): Promise<{ Authorization: string }> {
-  const backend = new URL(API_BASE)
-  if (
-    backend.protocol !== 'http:' ||
-    backend.port !== '8000' ||
-    !['127.0.0.1', 'localhost'].includes(backend.hostname)
-  ) {
+async function authHeaders(apiBaseUrl: string): Promise<{ Authorization: string }> {
+  let backend: URL
+  try {
+    backend = new URL(apiBaseUrl)
+  } catch {
+    throw new ApiError(403, 'Local API credentials cannot be sent to a non-local backend.')
+  }
+  const isLoopback =
+    backend.protocol === 'http:' &&
+    !backend.username &&
+    !backend.password &&
+    backend.pathname === '/' &&
+    !backend.search &&
+    !backend.hash &&
+    (import.meta.env.DEV
+      ? backend.port === '8000' && ['127.0.0.1', 'localhost'].includes(backend.hostname)
+      : backend.port !== '' && backend.hostname === '127.0.0.1')
+  if (!isLoopback) {
     throw new ApiError(403, 'Local API credentials cannot be sent to a non-local backend.')
   }
   try {
@@ -75,7 +98,8 @@ async function authHeaders(): Promise<{ Authorization: string }> {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const authorization = await authHeaders()
+  const apiBaseUrl = await getApiBaseUrl()
+  const authorization = await authHeaders(apiBaseUrl)
   let res: Response | undefined
   let lastError: unknown
   // The packaged Electron app may render shortly before its embedded FastAPI
@@ -83,7 +107,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   // saved provider settings load automatically on first launch.
   for (let attempt = 0; attempt < 10; attempt += 1) {
     try {
-      res = await fetch(`${API_BASE}${path}`, {
+      res = await fetch(`${apiBaseUrl}${path}`, {
         ...options,
         headers: { 'Content-Type': 'application/json', ...options.headers, ...authorization }
       })
@@ -97,7 +121,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     }
   }
   if (!res) {
-    throw new ApiError(0, lastError ? 'Could not reach the Atlas server. Is it running?' : 'Could not reach the Atlas server.')
+    throw new ApiError(
+      0,
+      lastError
+        ? 'Could not reach the Atlas server. Is it running?'
+        : 'Could not reach the Atlas server.'
+    )
   }
 
   if (!res.ok) {
@@ -161,9 +190,11 @@ export async function sendMessageStream(
   signal?: AbortSignal,
   mode: ExecutionMode = 'auto'
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/sessions/${sessionId}/messages/stream`, {
+  const apiBaseUrl = await getApiBaseUrl()
+  const authorization = await authHeaders(apiBaseUrl)
+  const res = await fetch(`${apiBaseUrl}/sessions/${sessionId}/messages/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    headers: { 'Content-Type': 'application/json', ...authorization },
     body: JSON.stringify({ prompt, images: images?.length ? images : undefined, mode }),
     signal
   })

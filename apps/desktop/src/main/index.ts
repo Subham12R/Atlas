@@ -7,6 +7,7 @@ import { writeFile, rm, readFile, mkdir, rename, open } from 'fs/promises'
 import { tmpdir } from 'os'
 import { randomBytes, randomUUID } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { getFreeLoopbackPort } from './loopback-port.mjs'
 import icon from '../../resources/icon.png?asset'
 import { checkOllamaHealth, createLocalRuntimeManager } from './localRuntime'
 
@@ -111,9 +112,10 @@ async function saveSession(email: string | null): Promise<void> {
   await writeJsonAtomic(sessionPath(), { email })
 }
 
-const BACKEND_URL = 'http://127.0.0.1:8000'
+const DEVELOPMENT_BACKEND_URL = 'http://127.0.0.1:8000'
 const BACKEND_TOKEN = is.dev ? process.env.ATLAS_API_TOKEN || '' : randomBytes(32).toString('hex')
 const backendHeaders = { Authorization: `Bearer ${BACKEND_TOKEN}` }
+let backendUrl: string | null = null
 let backendProcess: ChildProcess | null = null
 const localRuntime = createLocalRuntimeManager({
   platform: process.platform,
@@ -131,14 +133,17 @@ function assertTrustedMainFrame(event: IpcMainInvokeEvent): void {
   }
 }
 
-async function waitForBackend(timeoutMs = 10_000): Promise<boolean> {
+async function waitForBackend(timeoutMs = 60_000): Promise<boolean> {
+  const url = backendUrl
+  if (!url) return false
+
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${BACKEND_URL}/providers`, { headers: backendHeaders })
+      const response = await fetch(`${url}/providers`, { headers: backendHeaders })
       if (response.ok) return true
     } catch {
-      // The embedded server is still starting.
+      // The bundled server is still starting.
     }
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
@@ -146,16 +151,21 @@ async function waitForBackend(timeoutMs = 10_000): Promise<boolean> {
 }
 
 async function startEmbeddedBackend(): Promise<void> {
-  // Development continues to use the explicitly started uvicorn process. The
-  // packaged app starts its PyInstaller-bundled server from app resources.
-  if (is.dev || backendProcess) return
+  if (is.dev) {
+    backendUrl = DEVELOPMENT_BACKEND_URL
+    return
+  }
+  if (backendProcess) return
 
-  const serverPath = join(process.resourcesPath, 'server', 'atlas-server')
+  const executable = process.platform === 'win32' ? 'atlas-server.exe' : 'atlas-server'
+  const serverPath = join(process.resourcesPath, 'server', executable)
   if (!existsSync(serverPath)) {
     console.error(`Embedded Atlas server is missing: ${serverPath}`)
     return
   }
 
+  const port = await getFreeLoopbackPort()
+  backendUrl = `http://127.0.0.1:${port}`
   const dataPath = app.getPath('userData')
   await mkdir(dataPath, { recursive: true })
   const log = await open(join(dataPath, 'atlas-server.log'), 'a')
@@ -163,6 +173,7 @@ async function startEmbeddedBackend(): Promise<void> {
     cwd: dataPath,
     env: {
       ...process.env,
+      ATLAS_PORT: String(port),
       BRAIN_DB_PATH: join(dataPath, 'brain.db'),
       CHATS_DB_PATH: join(dataPath, 'chats.db'),
       CREDENTIALS_DB_PATH: join(dataPath, 'credentials.db'),
@@ -174,10 +185,13 @@ async function startEmbeddedBackend(): Promise<void> {
     log.close().catch(() => {})
     console.error(`Embedded Atlas server exited with code ${code}`)
     backendProcess = null
+    backendUrl = null
   })
 
   if (!(await waitForBackend())) {
-    console.error(`Embedded Atlas server did not become ready; see ${join(dataPath, 'atlas-server.log')}`)
+    console.error(
+      `Embedded Atlas server did not become ready; see ${join(dataPath, 'atlas-server.log')}`
+    )
   }
 }
 
@@ -193,18 +207,20 @@ async function getChats(): Promise<unknown[]> {
   // The renderer asks for chats immediately on startup. Retry while the
   // embedded server is coming online instead of returning an empty fallback
   // that could overwrite the persisted SQLite library.
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    try {
-      const res = await fetch(`${BACKEND_URL}/chats`, { headers: backendHeaders })
-      if (res.ok) {
-        backendChats = (await res.json()) as unknown[]
-        fetchFailed = false
-        break
+  if (backendUrl) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      try {
+        const res = await fetch(`${backendUrl}/chats`, { headers: backendHeaders })
+        if (res.ok) {
+          backendChats = (await res.json()) as unknown[]
+          fetchFailed = false
+          break
+        }
+      } catch (err) {
+        if (attempt === 9) console.error('Failed to connect to backend for chats', err)
       }
-    } catch (err) {
-      if (attempt === 9) console.error('Failed to connect to backend for chats', err)
+      await new Promise((resolve) => setTimeout(resolve, 300))
     }
-    await new Promise((resolve) => setTimeout(resolve, 300))
   }
 
   if (!fetchFailed) {
@@ -218,7 +234,7 @@ async function getChats(): Promise<unknown[]> {
           await rm(chatsPath(), { force: true })
           return localChats
         }
-      } catch (err) {
+      } catch {
         // legacy file not found or already migrated
       }
     }
@@ -236,21 +252,23 @@ async function getChats(): Promise<unknown[]> {
 
 async function setChats(chats: unknown[]): Promise<void> {
   // Sync to backend SQLite
-  try {
-    const res = await fetch(`${BACKEND_URL}/chats`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...backendHeaders },
-      body: JSON.stringify(chats)
-    })
-    if (res.ok) {
-      // Keep a durable fallback snapshot as well. This protects chat history
-      // if the app is closed while the embedded backend is restarting.
-      await mkdir(app.getPath('userData'), { recursive: true })
-      await writeJsonAtomic(chatsPath(), chats)
-      return
+  if (backendUrl) {
+    try {
+      const res = await fetch(`${backendUrl}/chats`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...backendHeaders },
+        body: JSON.stringify(chats)
+      })
+      if (res.ok) {
+        // Keep a durable fallback snapshot as well. This protects chat history
+        // if the app is closed while the embedded backend is restarting.
+        await mkdir(app.getPath('userData'), { recursive: true })
+        await writeJsonAtomic(chatsPath(), chats)
+        return
+      }
+    } catch (err) {
+      console.error('Failed to sync chats to backend', err)
     }
-  } catch (err) {
-    console.error('Failed to sync chats to backend', err)
   }
 
   // Double write to local chats.json as local fallback backup
@@ -475,6 +493,10 @@ app.whenReady().then(async () => {
   ipcMain.on('ping', () => console.log('pong'))
 
   ipcMain.handle('export-pdf', (_event, html: string) => exportHtmlToPdf(html))
+  ipcMain.handle('get-backend-url', (event) => {
+    assertTrustedMainFrame(event)
+    return backendUrl
+  })
   ipcMain.handle('get-profile', () => getProfile())
   ipcMain.handle('set-profile', (_event, profile: Profile) => setProfile(profile))
   ipcMain.handle('has-app-password', () => hasAppPassword())

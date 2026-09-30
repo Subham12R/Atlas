@@ -33,6 +33,47 @@ it('never sends the local bearer token to a non-loopback backend', async () => {
   expect(fetch).not.toHaveBeenCalled()
 })
 
+it('uses the bundled backend URL and token on its allocated loopback port', async () => {
+  vi.stubEnv('DEV', false)
+  vi.resetModules()
+  const getBackendToken = vi.fn(async () => 'fixture-token')
+  vi.stubGlobal('api', {
+    getBackendUrl: async () => 'http://127.0.0.1:43127',
+    getBackendToken
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>(
+    async () =>
+      new Response(JSON.stringify({ text: 'ok', provider: 'local', meta: null }), {
+        headers: { 'Content-Type': 'application/json' }
+      })
+  )
+  vi.stubGlobal('fetch', fetch)
+  const { sendMessage: sendBundled } = await import('./api')
+
+  await sendBundled('session-1', 'hello')
+
+  expect(fetch.mock.calls[0]?.[0]).toBe('http://127.0.0.1:43127/sessions/session-1/messages')
+  expect(fetch.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-token' })
+  expect(getBackendToken).toHaveBeenCalledOnce()
+})
+
+it('rejects a non-loopback bundled backend before requesting the token', async () => {
+  vi.stubEnv('DEV', false)
+  vi.resetModules()
+  const getBackendToken = vi.fn(async () => 'fixture-token')
+  vi.stubGlobal('api', {
+    getBackendUrl: async () => 'https://untrusted.example',
+    getBackendToken
+  })
+  const fetch = vi.fn()
+  vi.stubGlobal('fetch', fetch)
+  const { sendMessage: sendBundled } = await import('./api')
+
+  await expect(sendBundled('session-1', 'private')).rejects.toMatchObject({ status: 403 })
+  expect(getBackendToken).not.toHaveBeenCalled()
+  expect(fetch).not.toHaveBeenCalled()
+})
+
 it('sends the selected mode with streamed prompt and images', async () => {
   vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
   const fetch = vi.fn<typeof globalThis.fetch>(

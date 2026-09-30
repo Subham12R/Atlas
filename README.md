@@ -443,7 +443,11 @@ BRAIN_DB_PATH=brain.db
 
 **Never commit `.env`, `brain.db`, `credentials.db`, or `chats.db`.**
 
-The desktop app reads the backend URL from `VITE_API_BASE_URL` (defaults to `http://127.0.0.1:8000`). For local-token safety, only `http://127.0.0.1:8000` and `http://localhost:8000` are accepted.
+In development, the desktop renderer uses `VITE_API_BASE_URL` (default
+`http://127.0.0.1:8000`). The local bearer token is sent only to an HTTP
+loopback backend. Packaged apps launch the bundled backend on an available
+loopback port and receive that URL from Electron; they do not depend on or reuse
+a separately running server.
 
 ---
 

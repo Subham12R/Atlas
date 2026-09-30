@@ -8,5 +8,5 @@ export default defineConfig({
       '@renderer': resolve('src/renderer/src')
     }
   },
-  test: { environment: 'jsdom', globals: true }
+  test: { environment: 'jsdom', globals: true, include: ['src/**/*.test.{ts,tsx}'] }
 })

@@ -21,6 +21,7 @@ export interface RegisterProfile {
 const api = {
   exportPdf: (html: string): Promise<{ ok: boolean; path?: string; canceled?: boolean }> =>
     ipcRenderer.invoke('export-pdf', html),
+  getBackendUrl: (): Promise<string | null> => ipcRenderer.invoke('get-backend-url'),
   getProfile: (): Promise<Profile> => ipcRenderer.invoke('get-profile'),
   setProfile: (profile: Profile): Promise<void> => ipcRenderer.invoke('set-profile', profile),
   hasAppPassword: (): Promise<boolean> => ipcRenderer.invoke('has-app-password'),

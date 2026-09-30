@@ -4,23 +4,30 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import api
 from api import app
 
 
 class LocalApiSecurityTests(TestCase):
     def test_every_api_route_requires_the_local_token(self):
-        with patch.dict(os.environ, {"ATLAS_API_TOKEN": "a" * 64}), TestClient(app) as client:
+        with patch.object(api, 'API_TOKEN', 'a' * 64), TestClient(app) as client:
             self.assertEqual(client.get('/providers').status_code, 401)
             self.assertEqual(client.get('/providers', headers={'Authorization': 'Bearer wrong'}).status_code, 401)
             self.assertEqual(client.get('/providers', headers={'Authorization': 'Bearer ' + 'a' * 64}).status_code, 200)
 
+    def test_environment_changes_cannot_rotate_the_running_server_token(self):
+        with patch.object(api, 'API_TOKEN', 'a' * 64), \
+             patch.dict(os.environ, {'ATLAS_API_TOKEN': 'b' * 64}), TestClient(app) as client:
+            self.assertEqual(client.get('/providers', headers={'Authorization': 'Bearer ' + 'a' * 64}).status_code, 200)
+            self.assertEqual(client.get('/providers', headers={'Authorization': 'Bearer ' + 'b' * 64}).status_code, 401)
+
     def test_missing_token_configuration_fails_closed(self):
-        with patch.dict(os.environ, {"ATLAS_API_TOKEN": ""}), TestClient(app) as client:
+        with patch.object(api, 'API_TOKEN', ''), TestClient(app) as client:
             self.assertEqual(client.get('/providers').status_code, 503)
 
     def test_browser_origins_are_restricted_and_do_not_bypass_auth(self):
         token = 'a' * 64
-        with patch.dict(os.environ, {"ATLAS_API_TOKEN": token}), TestClient(app) as client:
+        with patch.object(api, 'API_TOKEN', token), TestClient(app) as client:
             bad = client.options('/providers', headers={
                 'Origin': 'https://untrusted.example',
                 'Access-Control-Request-Method': 'GET',

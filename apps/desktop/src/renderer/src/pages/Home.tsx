@@ -24,6 +24,7 @@ import {
   createSession,
   friendlyErrorMessage,
   generateImage,
+  routeTurn,
   sendMessageStream,
   sendAgentStream,
   type DraftKind,
@@ -153,6 +154,7 @@ function Home(): React.JSX.Element {
         attachments: Attachment[]
         mode: ExecutionMode
         draftKind: DraftKind
+        preferredModel: boolean
       }[]
     >()
   )
@@ -267,14 +269,15 @@ function Home(): React.JSX.Element {
     model: string | null,
     attachments: Attachment[],
     mode: ExecutionMode,
-    draftKind: DraftKind = 'research_brief'
+    draftKind: DraftKind = 'research_brief',
+    preferredModel = false
   ): Promise<void> => {
     let chatId = activeChatId
     let baseChat = chatId ? chats.find((c) => c.id === chatId) : undefined
 
     if (baseChat?.isSending && chatId && !processingQueued.current.has(chatId)) {
       const queue = queuedMessages.current.get(chatId) || []
-      queue.push({ content, tool, provider, model, attachments, mode, draftKind })
+      queue.push({ content, tool, provider, model, attachments, mode, draftKind, preferredModel })
       queuedMessages.current.set(chatId, queue)
       setChats((prev) =>
         prev.map((chat) =>
@@ -429,12 +432,6 @@ function Home(): React.JSX.Element {
       return
     }
 
-    // A chat with an established provider that picks a different one mid-
-    // conversation gets a fresh session -- a brand new chat (provider still
-    // null) is never treated as a "switch".
-    const switchingProvider =
-      !!baseChat.provider && (baseChat.provider !== provider || baseChat.model !== model)
-
     // Set once the (empty) assistant placeholder is pushed, so a failure
     // partway through streaming can turn that same bubble into the error
     // instead of leaving a permanently blank one sitting next to a separate
@@ -442,20 +439,35 @@ function Home(): React.JSX.Element {
     let assistantMsgId: string | null = null
 
     try {
+      const agentMode = modeForTool(resolvedTool)
+      const route = mode === 'auto' && agentMode === 'chat'
+        ? await routeTurn(content, mode,
+            preferredModel ? { provider, model: model || '' } : undefined,
+            controller.signal)
+        : null
+      if (route && (
+        !['ready', 'degraded'].includes(route.state) || !route.model || route.provider !== 'local'
+      )) {
+        throw new ApiError(409, route.reason || 'No permitted local model is available')
+      }
+      const routedProvider = route?.provider ?? provider
+      const routedModel = route?.model ?? model
+      // A new route gets a new session; the previous provider context is explicitly bounded.
+      const switchingProvider = !!baseChat.provider &&
+        (baseChat.provider !== routedProvider || baseChat.model !== routedModel)
       let sessionId = baseChat.sessionId
       let threadId = baseChat.threadId
-      let chatProvider = baseChat.provider ?? provider
-      let chatModel = baseChat.model ?? model
+      let chatProvider = baseChat.provider ?? routedProvider
+      let chatModel = baseChat.model ?? routedModel
 
+      const previousSessionId = switchingProvider ? sessionId : null
       if (switchingProvider) {
-        if (sessionId) closeSession(sessionId).catch(() => {})
         sessionId = null
         threadId = null
-        chatProvider = provider
-        chatModel = model
+        chatProvider = routedProvider
+        chatModel = routedModel
       }
 
-      const agentMode = modeForTool(resolvedTool)
       let promptToSend = buildFormattingRules() + applyAttachments(content, attachments)
       if (profile) {
         promptToSend = buildPersonalizationContext(profile) + promptToSend
@@ -474,6 +486,7 @@ function Home(): React.JSX.Element {
         sessionId = session.session_id
         threadId = session.thread_id
         chatProvider = session.provider
+        if (previousSessionId) void closeSession(previousSessionId).catch(() => {})
         setChats((prev) =>
           prev.map((chat) =>
             chat.id === targetChatId
@@ -492,7 +505,8 @@ function Home(): React.JSX.Element {
         provider: chatProvider,
         model: chatModel || undefined,
         isNew: true,
-        tool: resolvedTool || undefined
+        tool: resolvedTool || undefined,
+        routeReason: route ? `${route.mode} · ${route.model} · ${route.reason}` : undefined
       }
 
       setChats((prev) =>
@@ -717,7 +731,8 @@ function Home(): React.JSX.Element {
           next.model,
           next.attachments,
           next.mode,
-          next.draftKind
+          next.draftKind,
+          next.preferredModel
         )
       }
     }

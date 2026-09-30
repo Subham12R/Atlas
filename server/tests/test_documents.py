@@ -64,7 +64,7 @@ class DocumentTests(TestCase):
 
     def test_account_reset_removes_documents_even_when_chat_memory_is_disabled(self):
         self.docs.ingest_document('notes.md', 'Private source')
-        with patch.dict(os.environ, {'ATLAS_API_TOKEN': 'a' * 64}), \
+        with patch('api.API_TOKEN', 'a' * 64), \
              patch('api.get_store', return_value=self.store), \
              patch('api.BRAIN_ENABLED', False), \
              patch('api.credentials_store.clear_all'), \
@@ -74,7 +74,7 @@ class DocumentTests(TestCase):
         self.assertEqual(self.docs.list_documents(), [])
 
     def test_authenticated_api_ingests_lists_searches_and_deletes(self):
-        with patch.dict(os.environ, {'ATLAS_API_TOKEN': 'a' * 64}), \
+        with patch('api.API_TOKEN', 'a' * 64), \
              patch('api.get_store', return_value=self.store), TestClient(app) as client:
             headers = {'Authorization': 'Bearer ' + 'a' * 64}
             self.assertEqual(client.get('/documents').status_code, 401)

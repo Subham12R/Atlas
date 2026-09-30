@@ -7,6 +7,70 @@ afterEach(() => {
   Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
 })
 
+it('routes Auto locally before creating a session and records the decision', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', {
+    getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }),
+    getChats: async () => [],
+    getProfile: async () => ({ name: '', avatarDataUrl: null }),
+    setChats: async () => {}
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+    const path = new URL(String(input)).pathname
+    const data = path === '/routing/turn'
+      ? { state: 'ready', mode: 'coding', provider: 'local', model: 'installed:7b', reason: 'deterministic text classification' }
+      : path === '/settings/providers'
+        ? { local: { configured: true, runtime: 'ollama' } }
+        : path === '/settings/providers/local/models'
+          ? { runtime: 'ollama', models: ['installed:7b'] }
+          : path === '/sessions'
+            ? { session_id: 'session-1', provider: 'local', thread_id: null }
+            : null
+    if (path.endsWith('/messages/stream')) return new Response('data: {"text":"Done"}\n\n')
+    return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } })
+  })
+  vi.stubGlobal('fetch', fetch)
+  render(<Home />)
+  await screen.findByRole('button', { name: 'Model: installed:7b' })
+  fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Fix this function' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/messages/stream'))).toBe(true))
+  const session = fetch.mock.calls.find(([url]) => String(url).endsWith('/sessions'))
+  expect(JSON.parse(String(session?.[1]?.body))).toMatchObject({ provider: 'local', model: 'installed:7b' })
+  const routeIndex = fetch.mock.calls.findIndex(([url]) => String(url).endsWith('/routing/turn'))
+  const sessionIndex = fetch.mock.calls.findIndex(([url]) => String(url).endsWith('/sessions'))
+  expect(routeIndex).toBeLessThan(sessionIndex)
+  expect(await screen.findByText(/deterministic text classification/)).toBeTruthy()
+})
+
+it('does not open a session when Auto has no permitted model', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', {
+    getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }),
+    getChats: async () => [],
+    getProfile: async () => ({ name: '', avatarDataUrl: null }),
+    setChats: async () => {}
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+    const path = new URL(String(input)).pathname
+    const data = path === '/routing/turn'
+      ? { state: 'no_eligible_model', mode: 'coding', provider: null, model: null, reason: 'No permitted text model' }
+      : path === '/settings/providers'
+        ? { local: { configured: true, runtime: 'ollama' } }
+        : path === '/settings/providers/local/models'
+          ? { runtime: 'ollama', models: ['installed:7b'] }
+          : null
+    return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } })
+  })
+  vi.stubGlobal('fetch', fetch)
+  render(<Home />)
+  await screen.findByRole('button', { name: 'Model: installed:7b' })
+  fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Fix this function' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+  await screen.findByText(/No permitted text model/)
+  expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/sessions'))).toBe(false)
+})
+
 it('sends the chosen mode on the actual streamed turn request', async () => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal('api', {

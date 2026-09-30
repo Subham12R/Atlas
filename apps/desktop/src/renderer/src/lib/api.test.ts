@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { sendAgentStream, sendMessage, sendMessageStream } from './api'
+import { routeTurn, sendAgentStream, sendMessage, sendMessageStream } from './api'
 
-const localConnection = () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' })
+const localConnection = (): { url: string; token: string } => ({
+  url: 'http://127.0.0.1:8000', token: 'fixture-token'
+})
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -116,6 +118,21 @@ it('sends the local bearer token with agent stream requests', async () => {
   )
 
   expect(fetch.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-token' })
+})
+
+it('routes Auto through the authenticated local API before selecting a session', async () => {
+  vi.stubGlobal('api', { getBackendConnection: async () => localConnection() })
+  const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({
+    state: 'ready', mode: 'coding', provider: 'local', model: 'installed:7b', reason: 'classified'
+  })))
+  vi.stubGlobal('fetch', fetch)
+  const decision = await routeTurn('Fix this function', 'auto', { provider: 'local', model: 'installed:7b' })
+  expect(decision.model).toBe('installed:7b')
+  expect(fetch.mock.calls[0]?.[0]).toBe('http://127.0.0.1:8000/routing/turn')
+  expect(fetch.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-token' })
+  expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
+    prompt: 'Fix this function', mode: 'auto', preference: { provider: 'local', model: 'installed:7b' }
+  })
 })
 
 it('defaults plain-message requests to Auto without adding images', async () => {

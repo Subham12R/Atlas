@@ -391,7 +391,7 @@ $env:ATLAS_API_TOKEN = python -c "import secrets; print(secrets.token_hex(32))"
 uvicorn api:app --reload
 ```
 
-Every API route requires `Authorization: Bearer $ATLAS_API_TOKEN`, including `/docs` and `/openapi.json`. Development desktop and server must inherit the same 32+ character token. The packaged desktop generates a per-launch token for its embedded backend. CORS is restricted to the desktop origin and local Vite; the bearer token is not multi-user authentication.
+Every API route requires `Authorization: Bearer $ATLAS_API_TOKEN`, including `/docs` and `/openapi.json`. Development desktop and server must start with the same 32+ character token; changing it requires restarting both processes. The packaged desktop generates a per-launch token for its embedded backend. CORS is restricted to the desktop origin and local Vite; the bearer token is not multi-user authentication.
 
 On first run with the brain enabled, the embedding model (~50 MB) downloads once via `fastembed`, then works offline.
 
@@ -539,6 +539,10 @@ Recommended IDE: VS Code with ESLint + Prettier extensions.
 No API endpoint changes required.
 
 ---
+
+## Auto routing (text chat)
+
+Each plain-text Auto turn asks the authenticated backend to classify the request as Research, Coding, or Documentation and select an eligible installed/configured **loopback** text model. The decision and low-confidence fallback are shown with the reply. A manual model selection is treated as a preference and fails visibly if it is not eligible; no automatic web search, cloud fallback, download, or tool permission is implied. Explicit Search/Research and other tool modes retain their separate user-selected workflows. The first eligible discovered model wins until a reviewed capability/quality catalog and policy controls exist; Auto classification is a deterministic heuristic, not a measured task-quality claim. A configured remote OpenAI-compatible endpoint cannot be used in Auto. Brain's separate summarizer is disabled after an Auto turn so it cannot silently send that turn to a cloud provider (summary/graph enrichment remains degraded for that session).
 
 ## Known limitations
 

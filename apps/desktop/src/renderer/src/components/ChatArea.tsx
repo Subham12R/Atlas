@@ -70,6 +70,7 @@ export interface Message {
   queries?: string[]
   researchPlan?: { objective: string; freshness?: string; source_criteria?: string[] }
   runPhase?: string
+  routeReason?: string
   runStatus?: 'completed' | 'partial'
   attachmentSources?: { source_id: string; filename: string; section: string }[]
   draft?: DraftArtifact
@@ -109,7 +110,8 @@ interface ChatAreaProps {
     model: string | null,
     attachments: Attachment[],
     mode: ExecutionMode,
-    draftKind: DraftKind
+    draftKind: DraftKind,
+    preferredModel: boolean
   ) => void
   onNewChat: () => void
   onTogglePin: (id: string) => void
@@ -389,6 +391,7 @@ export default function ChatArea({
   onStopSending
 }: ChatAreaProps): React.JSX.Element {
   const [selectedModel, setSelectedModel] = useState('openai')
+  const [preferredModel, setPreferredModel] = useState(false)
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
   const [modelFilter, setModelFilter] = useState('')
   const [isExportingPdf, setIsExportingPdf] = useState(false)
@@ -461,6 +464,7 @@ export default function ChatArea({
   const currentChatId = activeChat?.id ?? null
   if (currentChatId !== syncedChatId) {
     setSyncedChatId(currentChatId)
+    setPreferredModel(false)
     if (activeChat?.provider) {
       setSelectedModel(
         activeChat.provider === 'local' && activeChat.model ? `local:${activeChat.model}` : activeChat.provider
@@ -476,6 +480,7 @@ export default function ChatArea({
     if (activeModels.length === 0) return
     if (activeModels.some((m) => m.id === selectedModel)) return
     setSelectedModel(activeModels[0].id)
+    setPreferredModel(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeModels, activeChat?.provider])
 
@@ -500,7 +505,8 @@ export default function ChatArea({
       selectedModelObj.model || null,
       attachments,
       mode,
-      draftKind
+      draftKind,
+      preferredModel
     )
   }
 
@@ -921,6 +927,7 @@ export default function ChatArea({
                 aria-pressed={selectedModel === model.id}
                 onClick={() => {
                   setSelectedModel(model.id)
+                  setPreferredModel(true)
                   setIsModelDropdownOpen(false)
                   setModelFilter('')
                 }}
@@ -1154,6 +1161,9 @@ export default function ChatArea({
                             ) : (
                               <>
                                 <AttachmentBlocks attachments={message.attachments} />
+                                {message.routeReason && (
+                                  <p className="mb-2 text-xs text-muted-foreground">Auto route: {message.routeReason}</p>
+                                )}
                                 <SearchTrace tool={message.tool} sources={message.sources}
                                   queries={message.queries} researchPlan={message.researchPlan} />
                                 <ThinkingBlock thinking={message.thinking} />

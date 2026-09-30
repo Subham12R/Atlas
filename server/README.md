@@ -60,7 +60,7 @@ $env:ATLAS_API_TOKEN = python -c "import secrets; print(secrets.token_hex(32))"
 uvicorn api:app --reload
 ```
 
-Set `ATLAS_API_TOKEN` to a random 32+ character secret before starting uvicorn. Every route, including `/docs` and `/openapi.json`, requires `Authorization: Bearer <token>`; packaged Electron generates and passes a per-run token automatically. Development desktop and server must inherit the same token. CORS permits only the desktop's file origin (`null`) and local Vite on port 5173; localhost access alone is not authorization.
+Every route, including `/docs` and `/openapi.json`, requires `Authorization: Bearer <token>`. The token is fixed at process startup; changing the environment requires restarting both development processes. Packaged Electron generates a per-launch token. CORS permits only the desktop's file origin (`null`) and local Vite on port 5173; localhost access alone is not authorization.
 
 | Method | Path | Purpose |
 |---|---|---|

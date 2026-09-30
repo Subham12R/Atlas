@@ -67,7 +67,7 @@ it('passes the selected mode and existing prompt fields to its parent', async ()
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
   expect(onSendMessage).toHaveBeenCalledWith(
-    'Find the facts', null, 'local', null, [], 'research', 'research_brief'
+    'Find the facts', null, 'local', null, [], 'research', 'research_brief', false
   )
 })
 
@@ -117,7 +117,7 @@ it('filters connected models from the composer and sends the selected local mode
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Hello' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
   expect(onSendMessage).toHaveBeenCalledWith(
-    'Hello', null, 'local', 'qwen2.5:7b', [], 'auto', 'research_brief'
+    'Hello', null, 'local', 'qwen2.5:7b', [], 'auto', 'research_brief', true
   )
 })
 

@@ -25,6 +25,25 @@ export interface SessionInfo {
   thread_id: string | null
 }
 
+export interface RouteDecision {
+  state: 'ready' | 'degraded' | 'no_eligible_model'
+  mode: 'research' | 'coding' | 'documentation'
+  provider: string | null
+  model: string | null
+  reason: string
+}
+
+export function routeTurn(
+  prompt: string,
+  mode: ExecutionMode,
+  preference?: { provider: string; model: string },
+  signal?: AbortSignal
+): Promise<RouteDecision> {
+  return request('/routing/turn', {
+    method: 'POST', body: JSON.stringify({ prompt, mode, preference }), signal
+  })
+}
+
 export interface ImagePayload {
   data: string // base64, no "data:" prefix
   mime: string

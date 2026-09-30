@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import secrets
 import uuid
 from contextlib import asynccontextmanager
+from typing import Literal
 
 import json
 
@@ -26,7 +28,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import credentials_store
 import chat_store
@@ -42,7 +44,8 @@ from agents.runner import run_selected
 from factory import (ANON_OK, BRAIN_ENABLED, BRAIN_TOPK, IMAGE_GEN_MODELS,
                      IMAGE_GEN_PROVIDERS, MODELS, PROVIDERS, AuthMissing,
                      build_adapter, build_brain, get_embedder, get_store)
-from policy import ExecutionMode
+from policy import ExecutionMode, ExecutionPolicy, ModelCandidate
+from routing import choose_model, is_loopback_endpoint
 from brain.documents import Documents
 
 TAVILY_KEY = "TAVILY_API_KEY"
@@ -85,11 +88,10 @@ async def require_local_token(request: Request, call_next):
     origin = request.headers.get("origin")
     if origin and origin not in ALLOWED_ORIGINS:
         return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
-    token = os.environ.get("ATLAS_API_TOKEN", API_TOKEN)
-    if len(token) < 32:
+    if not API_TOKEN:
         return JSONResponse({"detail": "Local API authentication is not configured"}, status_code=503)
     provided = request.headers.get("authorization", "")
-    if not provided.isascii() or not secrets.compare_digest(provided, f"Bearer {token}"):
+    if not provided.isascii() or not secrets.compare_digest(provided, f"Bearer {API_TOKEN}"):
         return JSONResponse({"detail": "Unauthorized"}, status_code=401,
                             headers={"WWW-Authenticate": "Bearer"})
     return await call_next(request)
@@ -101,6 +103,37 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+class ModelPreference(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    provider: Literal['local', 'openai', 'anthropic', 'gemini', 'openrouter']
+    model: str = Field(max_length=200)
+
+
+class TurnRouteRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    prompt: str = Field(min_length=1, max_length=10000)
+    mode: ExecutionMode = ExecutionMode.AUTO
+    preference: ModelPreference | None = None
+
+
+@app.post('/routing/turn')
+async def route_turn(body: TurnRouteRequest):
+    # Only a user-configured local text model is eligible. No implied cloud or tool grant.
+    base_url = _local_base_url()
+    local_model = credentials_store.get_value('LOCAL_LLM_MODEL')
+    models = ([local_model] if local_model else await _discover_local_models(base_url)) \
+        if is_loopback_endpoint(base_url) else []
+    candidates = [ModelCandidate('local', model,
+                                 frozenset({'research', 'coding', 'documentation'}), True)
+                  for model in models if model and not re.search(
+                      r'(embedding|embed-|unlimited-ocr|\bocr\b)', model, re.I)]
+    preference = ((body.preference.provider, body.preference.model)
+                  if body.preference else None)
+    decision = choose_model(body.prompt, body.mode, candidates, ExecutionPolicy(), preference)
+    return {'state': decision.state, 'mode': decision.mode, 'provider': decision.provider,
+            'model': decision.model, 'reason': decision.reason}
 
 
 class SessionCreate(BaseModel):
@@ -530,7 +563,11 @@ async def test_provider_connection(provider: str):
 @app.post("/chat")
 async def chat_once(body: ChatOnce):
     """One-shot, stateless: no conversation context is retained."""
+    if body.mode is ExecutionMode.AUTO and (body.provider != 'local' or
+                                            not is_loopback_endpoint(_local_base_url())):
+        raise HTTPException(403, 'Auto requires a permitted loopback model; select an explicit mode for a cloud model')
     adapter = _build(body.provider, body.anonymous, body.model)
+    _check_auto_session(body.mode, adapter)
     try:
         await adapter.init()
         reply = await adapter.send(body.prompt, _images(body.images))
@@ -558,9 +595,23 @@ async def create_session(body: SessionCreate):
             "thread_id": getattr(adapter, "thread_id", None)}
 
 
+def _check_auto_session(mode: ExecutionMode, adapter) -> None:
+    if mode is not ExecutionMode.AUTO:
+        return
+    writer = getattr(adapter, 'adapter', adapter)
+    base_url = getattr(getattr(writer, '_client', None), 'base_url', '')
+    if (getattr(adapter, 'provider', getattr(adapter, 'name', None)) != 'local' or
+            not is_loopback_endpoint(str(base_url))):
+        raise HTTPException(403, 'Auto requires a permitted loopback model; select an explicit mode for a cloud model')
+    # Brain enrichment may use a separate cloud summarizer even with a local chat adapter.
+    if hasattr(adapter, 'auto_summary'):
+        adapter.auto_summary = False
+
+
 @app.post("/sessions/{sid}/messages")
 async def send_message(sid: str, body: Message):
     adapter, lock = _get(sid)
+    _check_auto_session(body.mode, adapter)
     async with lock:
         try:
             reply = await adapter.send(body.prompt, _images(body.images))
@@ -572,6 +623,7 @@ async def send_message(sid: str, body: Message):
 @app.post("/sessions/{sid}/messages/stream")
 async def send_message_stream(sid: str, body: Message):
     adapter, lock = _get(sid)
+    _check_auto_session(body.mode, adapter)
 
     async def event_generator():
         async with lock:

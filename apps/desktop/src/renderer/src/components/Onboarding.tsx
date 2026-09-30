@@ -2,6 +2,7 @@ import React, { useLayoutEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import { cn } from '@/lib/utils'
 import { GradientWaveText } from '@/components/gradient-wave-text'
+import { FlowingGradientShader } from '@/components/flowing-gradient-shader'
 import { RichButton } from '@/components/rich-button'
 
 interface OnboardingProps {
@@ -231,17 +232,8 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
         isExiting && 'pointer-events-none'
       )}
     >
-      {/* Keep the intro clear; the existing ambient glow belongs to account creation. */}
-      {step > 1 && (
-        <div
-          className="pointer-events-none absolute inset-0"
-          aria-hidden
-          style={{
-            background:
-              'radial-gradient(ellipse 100% 140% at 50% 100%, rgba(186, 230, 253, 0.6) 0%, rgba(56, 189, 248, 0.4) 10%, rgba(14, 165, 233, 0.2) 28%, transparent 44%)'
-          }}
-        />
-      )}
+      {/* Keep the intro clear; the flowing shader glow belongs to account creation. */}
+      {step > 1 && <FlowingGradientShader paused={reduceMotion} />}
 
       <div className="relative z-10 flex flex-col flex-1 min-h-0">
       {/* Progress -- minimal dots, top center */}

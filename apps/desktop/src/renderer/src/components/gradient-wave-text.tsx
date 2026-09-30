@@ -251,7 +251,13 @@ export function GradientWaveText({
           transform: 'translateZ(0)',
           paddingBottom: `${bottomOffset}%`,
           marginBottom: `-${bottomOffset}%`,
-          paddingInline: 2
+          // background-clip:text only paints inside the box. Negative letter-spacing shrinks that
+          // box below the glyph ink, slicing the last letter, so pad it in em (scales with the font)
+          // and cancel the padding with a negative margin so layout/centering are unchanged.
+          paddingInline: '0.12em',
+          marginInline: '-0.12em',
+          paddingTop: '0.1em',
+          marginTop: '-0.1em'
         }}
       >
         {children}

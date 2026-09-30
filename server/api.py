@@ -579,18 +579,19 @@ async def _search_until_disconnect(request: Request, search):
 
 @app.post("/websearch")
 async def web_search(body: WebSearchRequest, request: Request):
-    """Real internet search (Tavily) backing the Search-web/Research-mode
+    """Real internet search backing the Search-web/Research-mode
     tools. Returns titles/urls/content for the caller to fold into the prompt
     and to show as source pins under the reply -- no conversation state here,
     same as image generation."""
     api_key = credentials_store.get_value(TAVILY_KEY)
-    if not api_key:
-        raise HTTPException(400, "no Tavily API key configured")
     try:
+        websearch.require_backend(api_key)
         results = await _search_until_disconnect(
             request, websearch.search(api_key, body.query, body.max_results)
         )
-    except httpx.TimeoutException:
+    except websearch.SearchUnavailable as e:
+        raise HTTPException(400 if str(e) == 'no Tavily API key configured' else 503, str(e))
+    except (httpx.TimeoutException, asyncio.TimeoutError):
         raise HTTPException(504, "web search timed out")
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429:

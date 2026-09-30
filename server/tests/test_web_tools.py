@@ -24,6 +24,19 @@ class WebToolTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(UnsafePage):
             await fetch_page(ctx, FetchInput(source_id='S9'))
 
+    async def test_explicit_free_search_tool_keeps_source_ids_without_key(self):
+        ctx = ToolContext(run_id='free', allowed_tools=frozenset({'web_search'}),
+                          deadline=time.monotonic()+90, cancelled=asyncio.Event())
+        async def free(*args):
+            return [{'title': 'Guide', 'url': 'https://example.org/', 'content': 'Excerpt'}]
+        with patch.dict('os.environ', {'ATLAS_WEB_SEARCH_PROVIDER': 'free-search-mcp'}), patch(
+            'tools.web.credentials_store.get_value', return_value=None
+        ), patch('websearch.shutil.which', return_value='/fixture/search-mcp'), patch(
+            'tools.web.websearch.search', side_effect=free) as upstream:
+            result = await search_web(ctx, SearchInput(query='guide'))
+        self.assertEqual(result.source_ids, ['S1'])
+        upstream.assert_awaited_once_with(None, 'guide', 8)
+
     async def test_validates_every_address_and_target(self):
         def fake_dns(host, port, **kwargs):
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('8.8.8.8', port)),

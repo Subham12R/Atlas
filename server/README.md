@@ -47,6 +47,22 @@ LOCAL_LLM_MODEL=llama3.2
 Advanced settings are written to `credentials.db` instead and take
 precedence over `.env` without needing a restart.
 
+## Web search backend
+
+Search and Research use Tavily by default (`TAVILY_API_KEY`). To use the
+[keyless free-search-mcp server](https://github.com/sweetcornna/free-search-mcp)
+instead, install its **0.13.1** executable separately on the backend's PATH
+(e.g. `uv tool install free-search-mcp==0.13.1`), install this server's
+requirements (including the MCP Python client), and start the backend with
+`ATLAS_WEB_SEARCH_PROVIDER=free-search-mcp`. No Tavily key is then required.
+The backend launches only the installed `search-mcp --transport stdio`, calls
+only its JSON `search` tool, disables its download tool, and never runs `uvx`
+or installs a package at request time. A missing executable returns 503 rather
+than silently falling back to Tavily. Search still sends the query to external
+search engines; "keyless" does not mean offline. An installed executable must
+also be discoverable on the packaged app's PATH; packaged use is not yet
+verified.
+
 ## Run the HTTP API
 
 Set a random `ATLAS_API_TOKEN` (at least 32 ASCII characters) in the server

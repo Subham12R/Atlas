@@ -65,6 +65,18 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(adapter.messages[1][-1].content)
         self.assertEqual(payload, {'summary': 'ok', 'data': {'result': 'q'}, 'untrusted': False})
 
+    async def test_native_model_can_choose_bounded_calculator(self):
+        adapter = FakeAdapter([AdapterTurn('', (ToolCall('calc1', 'calculator',
+                                 '{"expression":"0.1+0.2"}'),)), AdapterTurn('0.3')])
+        context = self.context()
+        context.allowed_tools = frozenset({'calculator'})
+        events = []
+        answer = await run_tool_loop(adapter, 'What is 0.1 + 0.2?', context, events.append)
+        self.assertEqual(answer, '0.3')
+        result = json.loads(adapter.messages[1][-1].content)
+        self.assertEqual(result['data']['result'], '0.3')
+        self.assertIn('calculator', [e['tool'] for e in events if e['type'] == 'tool.completed'])
+
     async def test_unknown_and_repeated_call_ids_are_rejected(self):
         for calls in ((ToolCall('c1', 'unknown', '{}'),),
                       (ToolCall('c1', 'web_search', '{}'), ToolCall('c1', 'web_search', '{}'))):

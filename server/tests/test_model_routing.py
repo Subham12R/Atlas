@@ -23,6 +23,25 @@ class ModelRoutingTests(unittest.TestCase):
         self.assertEqual(classify_mode('Fix this function', ExecutionMode.RESEARCH), (ExecutionMode.RESEARCH, False))
         self.assertEqual(classify_mode('hello', ExecutionMode.AUTO), (ExecutionMode.DOCUMENTATION, True))
 
+    def test_action_verb_breaks_mixed_signal_tie_but_keeps_uncertainty(self):
+        decision = choose_model('Debug this evidence parser', ExecutionMode.AUTO,
+                                [self.cloud, self.local], ExecutionPolicy())
+        self.assertEqual((decision.mode, decision.state, decision.provider),
+                         (ExecutionMode.CODING, 'degraded', 'local'))
+        self.assertIn('low confidence', decision.reason)
+        self.assertNotIn('documentation fallback', decision.reason)
+        self.assertEqual(classify_mode('Research this Python parser', ExecutionMode.AUTO),
+                         (ExecutionMode.DOCUMENTATION, True))
+
+    def test_implicit_legal_question_is_research_but_not_verified(self):
+        decision = choose_model('Which court decided the case?', ExecutionMode.AUTO,
+                                [self.cloud, self.local], ExecutionPolicy())
+        self.assertEqual((decision.mode, decision.state, decision.provider),
+                         (ExecutionMode.RESEARCH, 'degraded', 'local'))
+        self.assertNotIn('documentation fallback', decision.reason)
+        self.assertEqual(classify_mode('hello', ExecutionMode.AUTO),
+                         (ExecutionMode.DOCUMENTATION, True))
+
     def test_filters_before_preference_and_never_silently_falls_back(self):
         selected = choose_model('Fix this function', ExecutionMode.AUTO, [self.cloud, self.local], ExecutionPolicy())
         self.assertEqual((selected.state, selected.provider, selected.model, selected.mode),

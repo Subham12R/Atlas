@@ -57,7 +57,8 @@ class BrainTurnTests(unittest.IsolatedAsyncioTestCase):
             async def run_turn(self, messages, tools): return next(self.turns)
         self.brain.adapter = Writer()
         registry = ToolRegistry([ToolSpec(name=name, input_model=Inputs, handler=search)
-                                 for name in ('web_search', 'fetch_page', 'memory_search')])
+                                 for name in ('web_search', 'fetch_page', 'memory_search',
+                                              'calculator', 'compare_sources')])
         with patch('brain.brain.build_context', return_value=('memory', {'hits': []})) as recall, \
              patch('agents.runner.default_registry', return_value=registry):
             await run_selected(AgentTurnRequest(prompt='real question', mode='tools'),

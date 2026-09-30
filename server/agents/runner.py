@@ -32,7 +32,8 @@ MODE_TOOLS = {
     'research': frozenset({'web_search', 'fetch_page'}),
     'plan': frozenset(), 'write': frozenset(), 'draft': frozenset(),
     'tools': frozenset({'web_search', 'fetch_page', 'memory_search',
-                        'search_attached_files', 'read_attached_file'})
+                        'search_attached_files', 'read_attached_file',
+                        'calculator', 'compare_sources'})
 }
 
 

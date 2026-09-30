@@ -71,6 +71,36 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ToolDenied):
             await registry.run('web_search', {'query': 'ok'}, self.context(allowed=()))
 
+    async def test_calculator_is_decimal_and_rejects_code_or_unbounded_work(self):
+        from tools.registry import default_registry
+        registry = default_registry()
+        context = self.context(allowed=('calculator',))
+        result = await registry.run('calculator', {'expression': '0.1 + 0.2'}, context)
+        self.assertEqual(result.data['result'], '0.3')
+        for expression in ('__import__("os")', '1 / 0', '2 ** 1000', '1+' * 70 + '1'):
+            with self.subTest(expression=expression), self.assertRaises((ValueError, ValidationError)):
+                await registry.run('calculator', {'expression': expression}, context)
+        with self.assertRaises(ToolDenied):
+            await registry.run('calculator', {'expression': '2+2'}, self.context())
+
+    async def test_compare_sources_reads_only_issued_ids_without_inventing_agreement(self):
+        from tools.registry import default_registry
+        registry = default_registry()
+        context = self.context(allowed=('compare_sources',))
+        context.sources['S1'] = {'source_id': 'S1', 'title': 'First', 'snippet': 'Policy starts in 2025.'}
+        context.sources['S2'] = {'source_id': 'S2', 'title': 'Second', 'snippet': 'Policy starts in 2026.'}
+        result = await registry.run('compare_sources',
+            {'source_ids': ['S1', 'S2'], 'question': 'When does it start?'}, context)
+        self.assertEqual([item['source_id'] for item in result.data['sources']], ['S1', 'S2'])
+        self.assertIn('2025', result.data['sources'][0]['excerpt'])
+        self.assertNotIn('agree', result.summary.lower())
+        with self.assertRaises(ValueError):
+            await registry.run('compare_sources',
+                {'source_ids': ['S1', 'S3'], 'question': 'When?'}, context)
+        with self.assertRaises(ValidationError):
+            await registry.run('compare_sources',
+                {'source_ids': ['S1', 'S1'], 'question': 'When?'}, context)
+
     async def test_limits_cancel_deadline_and_write_approval(self):
         registry = ToolRegistry([
             ToolSpec(name='web_search', input_model=Inputs, handler=echo, max_output_bytes=8),

@@ -44,6 +44,26 @@ it('keeps one intent across first-turn remount and later sends, but starts a new
   expect(screen.getByRole('button', { name: 'Intent: Auto' })).toBeTruthy()
 })
 
+it('does not dispatch automatic image requests to a text-only provider', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', {
+    getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }),
+    getChats: async () => [], getProfile: async () => ({ name: '', avatarDataUrl: null }), setChats: async () => {}
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => new Response(JSON.stringify(
+    new URL(String(input)).pathname === '/settings/providers/local/models'
+      ? { runtime: 'ollama', models: ['installed:7b'] }
+      : { local: { configured: true, runtime: 'ollama' } }
+  ), { headers: { 'Content-Type': 'application/json' } }))
+  vi.stubGlobal('fetch', fetch)
+  render(<Home />)
+  await screen.findByRole('button', { name: 'Model: installed:7b' })
+  fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Generate an image of a moon' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+  expect(await screen.findByText(/Image generation requires OpenAI or Gemini/)).toBeTruthy()
+  expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/images/generate'))).toBe(false)
+})
+
 it('routes Auto locally before creating a session and records the decision', async () => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal('api', {

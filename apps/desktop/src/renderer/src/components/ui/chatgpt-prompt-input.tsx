@@ -292,6 +292,7 @@ interface PromptBoxProps extends React.TextareaHTMLAttributes<HTMLTextAreaElemen
   modelPicker?: React.ReactNode
   canSend?: boolean
   toolCallsAvailable?: boolean
+  imageGenerationAvailable?: boolean
   intent?: ChatIntent
   onIntentChange?: (intent: ChatIntent) => void
   draftKind?: DraftKind
@@ -301,7 +302,7 @@ interface PromptBoxProps extends React.TextareaHTMLAttributes<HTMLTextAreaElemen
 // --- The Final, Self-Contained PromptBox Component ---
 export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
   ({ className, onSubmitPrompt, isBusy, onStop, modelPicker, canSend = true, toolCallsAvailable = false,
-    intent: intentProp, onIntentChange, draftKind: draftKindProp, onDraftKindChange, ...props }, ref) => {
+    imageGenerationAvailable = true, intent: intentProp, onIntentChange, draftKind: draftKindProp, onDraftKindChange, ...props }, ref) => {
     const internalTextareaRef = React.useRef<HTMLTextAreaElement>(null)
     const fileInputRef = React.useRef<HTMLInputElement>(null)
     const pendingTextFiles = React.useRef<File[]>([])
@@ -472,6 +473,10 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
         setFileError('This model cannot use safe tools. Choose a supported model or another intent.')
         return
       }
+      if (intent === 'generateImage' && !imageGenerationAvailable) {
+        setFileError('Image generation requires OpenAI or Gemini. Choose one of those providers or another intent.')
+        return
+      }
       if (onSubmitPrompt) {
         onSubmitPrompt(value.trim(), selectedTool, attachments, mode, draftKind)
       }
@@ -625,8 +630,8 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
                   <div className="flex flex-col gap-1">
                     {INTENT_OPTIONS.map((option) => (
                       <button key={option.id} type="button" aria-pressed={intent === option.id}
-                        disabled={option.id === 'safeTools' && !toolCallsAvailable}
-                        title={option.id === 'safeTools' && !toolCallsAvailable ? 'Selected model cannot choose tools; use Web search or Research web' : undefined}
+                        disabled={(option.id === 'safeTools' && !toolCallsAvailable) || (option.id === 'generateImage' && !imageGenerationAvailable)}
+                        title={option.id === 'safeTools' && !toolCallsAvailable ? 'Selected model cannot choose tools; use Web search or Research web' : option.id === 'generateImage' && !imageGenerationAvailable ? 'Image generation requires OpenAI or Gemini' : undefined}
                         onClick={() => { setIntent(option.id); setIsPopoverOpen(false); setFileError(null) }}
                         className="rounded-md px-3 py-2 text-left text-xs text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50">
                         {option.label}
@@ -644,6 +649,7 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
                     <button
                       type="button"
                       onClick={() => setIntent(generatingImage ? 'auto' : 'generateImage')}
+                      disabled={!imageGenerationAvailable}
                       className={cn(
                         'flex h-8 w-8 items-center justify-center rounded-full transition-colors cursor-pointer',
                         generatingImage
@@ -690,6 +696,17 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
                   </TooltipContent>
                 </Tooltip>
 
+                {isBusy && onStop && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button type="button" onClick={onStop} aria-label="Stop response"
+                        className="flex h-8 w-8 items-center justify-center rounded-full text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring">
+                        <XIcon className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" showArrow={true}>Stop response</TooltipContent>
+                  </Tooltip>
+                )}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button

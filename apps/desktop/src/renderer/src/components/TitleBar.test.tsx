@@ -14,6 +14,7 @@ it('keeps the mac-style controls on the left and dispatches each window action',
     'Minimize',
     'Maximize'
   ])
+  expect(controls.slice(0, 2).every((control) => control.className.includes('-mr-2'))).toBe(true)
   controls.forEach((control) => fireEvent.click(control))
   expect(api.closeWindow).toHaveBeenCalledOnce()
   expect(api.minimizeWindow).toHaveBeenCalledOnce()

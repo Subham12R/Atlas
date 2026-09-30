@@ -282,3 +282,28 @@ it('renders level-three and level-four headings without interpreting fenced code
   expect(screen.getByRole('heading', { level: 4, name: '3.3 Dynamic tool calling' })).toBeTruthy()
   expect(screen.queryByRole('heading', { name: 'literal code' })).toBeNull()
 })
+
+it('links each issued source in a grouped citation and shows its source card', () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', { getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }) })
+  vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>(async () =>
+    new Response(JSON.stringify({ local: { configured: true } }), { headers: { 'Content-Type': 'application/json' } })))
+  const chat: Chat = {
+    id: 'sources', title: 'Sources', isPinned: false, timestamp: '', provider: 'local',
+    sessionId: null, threadId: null,
+    messages: [{ id: 'answer', sender: 'assistant', timestamp: '', content: 'A fact [S1, S3] and unknown [S9] [S2].',
+      sources: [
+        { source_id: 'S1', title: 'First source', url: 'https://example.org/1' },
+        { source_id: 'S3', title: 'Third source', url: 'https://example.org/3' },
+        { source_id: 'S2', title: 'Unsafe link', url: 'javascript:alert(1)' }
+      ] }]
+  }
+  render(<ChatArea isSidebarCollapsed={false} setIsSidebarCollapsed={vi.fn()}
+    activeChat={chat} onSendMessage={vi.fn()} onNewChat={vi.fn()}
+    onTogglePin={vi.fn()} onMessageRevealed={vi.fn()} onStopSending={vi.fn()} />)
+  expect(screen.getByRole('link', { name: '[S1]' }).getAttribute('href')).toBe('https://example.org/1')
+  expect(screen.getByRole('link', { name: '[S3]' }).getAttribute('href')).toBe('https://example.org/3')
+  expect(screen.queryByRole('link', { name: '[S9]' })).toBeNull()
+  expect(screen.queryByRole('link', { name: /Unsafe link/ })).toBeNull()
+  expect(screen.getByText(/Used 2 sources/)).toBeTruthy()
+})

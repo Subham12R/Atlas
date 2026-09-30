@@ -32,7 +32,7 @@ import {
   type ProviderSettingsMap
 } from '@/lib/api'
 import type { ExecutionMode } from '@/lib/modes'
-import type { ChatIntent, ComposerPreference } from '@/lib/chat-intent'
+import { supportsImageGeneration, type ChatIntent, type ComposerPreference } from '@/lib/chat-intent'
 import ThemeSwitch from '@/components/ui/theme-switch'
 
 export interface MessageFileAttachment {
@@ -258,13 +258,13 @@ function SearchTrace({
       ((!sources || sources.length === 0) && (!queries || queries.length === 0))) {
     return null
   }
-  const sourceList = sources || []
+  const sourceList = (sources || []).filter((source) => /^https?:\/\//i.test(source.url))
 
   return (
     <Task defaultOpen={false}>
       <TaskTrigger title={tool === 'deepResearch'
         ? `Research · ${queries?.length || 0} queries · ${sourceList.filter((s) => s.fetched).length} pages read`
-        : `Searched the web · ${sourceList.length} sources`} />
+        : tool === 'safeTools' ? `Safe tools · ${sourceList.length} sources` : `Web search · ${sourceList.length} sources`} />
       <TaskContent>
         {researchPlan && <p className="mb-2 text-xs font-medium">{researchPlan.objective}</p>}
         {researchPlan?.freshness && <p className="mb-2 text-[10px] text-muted-foreground">Freshness: {researchPlan.freshness}</p>}
@@ -606,7 +606,7 @@ export default function ChatArea({
       let lastIndex = 0
 
       // Match bold, code, or a server-issued source citation.
-      const regex = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([SA]\d+)\])/g
+      const regex = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([SA]\d+(?:,\s*[SA]\d+)*)\])/g
       let match
 
       let index = 0
@@ -634,13 +634,14 @@ export default function ChatArea({
             </code>
           )
         } else {
-          const source = sources?.find((s) => s.source_id === match[4])
-          const attachment = attachmentSources?.find((s) => s.source_id === match[4])
-          parts.push(source ? (
-            <a key={index++} href={source.url} target="_blank" rel="noreferrer" className="text-blue-600 underline" title={source.title}>
-              {fullMatch}
-            </a>
-          ) : attachment ? <span key={index++} title={`${attachment.filename}, ${attachment.section}`}>{fullMatch}</span> : fullMatch)
+          for (const [position, id] of match[4].split(/,\s*/).entries()) {
+            if (position) parts.push(', ')
+            const source = sources?.find((s) => s.source_id === id)
+            const attachment = attachmentSources?.find((s) => s.source_id === id)
+            parts.push(source && /^https?:\/\//i.test(source.url) ? (
+              <a key={index++} href={source.url} target="_blank" rel="noreferrer" className="text-blue-600 underline" title={source.title}>[{id}]</a>
+            ) : attachment ? <span key={index++} title={`${attachment.filename}, ${attachment.section}`}>[{id}]</span> : `[${id}]`)
+          }
         }
         lastIndex = regex.lastIndex
       }
@@ -871,7 +872,8 @@ export default function ChatArea({
         </div>
       ) : null}
       <SourcePins sources={message.sources?.filter((source) =>
-        !source.source_id || message.content.includes(`[${source.source_id}]`)
+        /^https?:\/\//i.test(source.url) && (!source.source_id ||
+          new RegExp(`\\[(?:[SA]\\d+,\\s*)*${source.source_id}(?:,|\\])`).test(message.content))
       )} />
       {message.draft && <DocumentDraftReview draft={message.draft} content={message.content} />}
       {message.runStatus === 'partial' && (
@@ -1074,6 +1076,7 @@ export default function ChatArea({
                   modelPicker={modelPicker}
                   canSend={activeModels.length > 0}
                   toolCallsAvailable={toolCallsAvailable}
+                  imageGenerationAvailable={supportsImageGeneration(selectedModelObj.provider)}
                   intent={composerPreference?.intent}
                   draftKind={composerPreference?.draftKind}
                   onIntentChange={(intent: ChatIntent) => onComposerChange?.({ intent })}
@@ -1256,6 +1259,7 @@ export default function ChatArea({
               canSend={activeModels.length > 0}
               isBusy={activeChat.isSending}
               toolCallsAvailable={toolCallsAvailable}
+              imageGenerationAvailable={supportsImageGeneration(selectedModelObj.provider)}
               intent={composerPreference?.intent}
               draftKind={composerPreference?.draftKind}
               onIntentChange={(intent: ChatIntent) => onComposerChange?.({ intent })}

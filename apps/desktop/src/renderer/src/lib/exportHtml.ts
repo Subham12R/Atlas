@@ -6,13 +6,21 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-function inlineToHtml(text: string): string {
+interface ExportSource { source_id?: string; url: string }
+
+function inlineToHtml(text: string, sources: ExportSource[] = []): string {
   return escapeHtml(text)
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[((?:[SA]\d+,\s*)*[SA]\d+)\]/g, (_, ids: string) =>
+      ids.split(/,\s*/).map((id) => {
+        const source = sources.find((item) => item.source_id === id)
+        if (!source || !/^https?:\/\//i.test(source.url)) return `[${id}]`
+        return `<a href="${escapeHtml(source.url).replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" rel="noreferrer">[${id}]</a>`
+      }).join(', '))
 }
 
-function markdownToHtml(text: string): string {
+function markdownToHtml(text: string, sources: ExportSource[] = []): string {
   const lines = text.split('\n')
   const out: string[] = []
   let inCode = false
@@ -21,7 +29,7 @@ function markdownToHtml(text: string): string {
 
   const flushList = (): void => {
     if (listItems.length) {
-      out.push('<ul>' + listItems.map((i) => `<li>${inlineToHtml(i)}</li>`).join('') + '</ul>')
+      out.push('<ul>' + listItems.map((i) => `<li>${inlineToHtml(i, sources)}</li>`).join('') + '</ul>')
       listItems = []
     }
   }
@@ -39,19 +47,11 @@ function markdownToHtml(text: string): string {
       codeLines.push(line)
       continue
     }
-    if (line.startsWith('# ')) {
+    const heading = /^ {0,3}(#{1,6}) (.+)$/.exec(line)
+    if (heading) {
       flushList()
-      out.push(`<h1>${inlineToHtml(line.slice(2))}</h1>`)
-      continue
-    }
-    if (line.startsWith('## ')) {
-      flushList()
-      out.push(`<h2>${inlineToHtml(line.slice(3))}</h2>`)
-      continue
-    }
-    if (line.startsWith('### ')) {
-      flushList()
-      out.push(`<h3>${inlineToHtml(line.slice(4))}</h3>`)
+      const level = heading[1].length
+      out.push(`<h${level}>${inlineToHtml(heading[2], sources)}</h${level}>`)
       continue
     }
     if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
@@ -59,7 +59,7 @@ function markdownToHtml(text: string): string {
       continue
     }
     flushList()
-    out.push(line.trim() === '' ? '<br/>' : `<p>${inlineToHtml(line)}</p>`)
+    out.push(line.trim() === '' ? '<br/>' : `<p>${inlineToHtml(line, sources)}</p>`)
   }
   flushList()
   return out.join('\n')
@@ -69,6 +69,7 @@ export interface ExportableMessage {
   sender: 'user' | 'assistant'
   content: string
   timestamp: string
+  sources?: ExportSource[]
 }
 
 export function chatToHtml(title: string, messages: ExportableMessage[]): string {
@@ -77,7 +78,7 @@ export function chatToHtml(title: string, messages: ExportableMessage[]): string
       const who = m.sender === 'user' ? 'You' : 'Assistant'
       return `<div class="msg ${m.sender}">
         <div class="meta">${escapeHtml(who)} &middot; ${escapeHtml(m.timestamp)}</div>
-        <div class="content">${markdownToHtml(m.content)}</div>
+        <div class="content">${markdownToHtml(m.content, m.sources)}</div>
       </div>`
     })
     .join('\n')
@@ -94,7 +95,7 @@ export function chatToHtml(title: string, messages: ExportableMessage[]): string
   .msg .meta { font-size: 11px; color: #6E6D6A; margin-bottom: 4px; }
   .msg.user .content { font-weight: 500; }
   .content p { margin: 6px 0; line-height: 1.5; font-size: 13px; }
-  .content h1, .content h2, .content h3 { margin: 16px 0 8px; }
+  .content h1, .content h2, .content h3, .content h4, .content h5, .content h6 { margin: 16px 0 8px; }
   .content pre { background: #F1EFEA; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 11px; }
   .content code { font-family: "SF Mono", Consolas, monospace; }
   .content ul { padding-left: 20px; }

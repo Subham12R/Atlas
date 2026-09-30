@@ -7,7 +7,7 @@ import Help from '@/components/Help'
 import type { Attachment, FileAttachment } from '@/components/ui/chatgpt-prompt-input'
 import { modeForTool, type AgentEvent } from '@/lib/agent-events.mjs'
 import type { ExecutionMode } from '@/lib/modes'
-import type { ComposerPreference } from '@/lib/chat-intent'
+import { supportsImageGeneration, type ComposerPreference } from '@/lib/chat-intent'
 
 interface UserProfile {
   name: string
@@ -379,6 +379,16 @@ function Home(): React.JSX.Element {
     // Image generation is a standalone request -- no conversation state, the
     // reply IS the image(s) -- so it never touches sessions/adapters at all.
     if (resolvedTool === 'generateImage') {
+      if (!supportsImageGeneration(provider)) {
+        setChats((prev) => prev.map((chat) => chat.id === targetChatId
+          ? { ...chat, isSending: false, isGeneratingImage: false, messages: [...chat.messages, {
+              id: `msg-${Date.now()}-e`, sender: 'assistant', timestamp: timestamp(),
+              content: '**Error:** Image generation requires OpenAI or Gemini. Choose one of those providers.'
+            }] }
+          : chat))
+        abortControllers.current.delete(targetChatId)
+        return
+      }
       try {
         const result = await generateImage(provider, content)
         const replyAttachments: MessageAttachment[] = []

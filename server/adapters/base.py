@@ -71,6 +71,19 @@ class AdapterCapabilities:
     supported_models: tuple[str, ...] = ()
 
 
+def alternating_turns(turns: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Provider-safe history: starts with the user, strictly alternates, no empty turns."""
+    out: list[tuple[str, str]] = []
+    for role, content in turns:
+        if not content.strip() or (not out and role != 'user'):
+            continue
+        if out and out[-1][0] == role:
+            out[-1] = (role, out[-1][1] + '\n\n' + content)
+        else:
+            out.append((role, content))
+    return out
+
+
 class BaseAdapter(ABC):
     name: str = "base"
     capabilities = AdapterCapabilities()
@@ -113,6 +126,12 @@ class BaseAdapter(ABC):
 
     async def new_chat(self) -> None:
         """Start a fresh conversation (drop context)."""
+        raise NotImplementedError
+
+    def set_history(self, turns: list[tuple[str, str]]) -> None:
+        """Replace the conversation with the chat's own (role, text) turns. The client's saved
+        chat is the source of truth, so a session rebuilt after a restart or model switch
+        continues exactly where the chat left off."""
         raise NotImplementedError
 
     async def __aenter__(self):

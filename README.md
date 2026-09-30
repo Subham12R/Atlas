@@ -48,7 +48,7 @@ Design goal: **nothing above the adapter layer needs provider-specific SDK logic
 ### Implemented
 
 - **Multi-provider chat** — OpenAI, Anthropic, Gemini, OpenRouter, and local OpenAI-compatible servers (Ollama, LM Studio, etc.)
-- **Auto and explicit text modes** — deterministic per-turn Auto classification (Research, Coding, Documentation), explainable local model routing, and explicitly selected configured cloud models; a mode label does not grant a tool or web access
+- **Auto and explicit text modes** — deterministic per-turn classification (Research, Coding, Documentation), local-first model selection, optional cloud opt-in, and a visible route/reasoning decision; a mode label alone does not grant web access
 - **Stateful sessions** — multi-turn conversations with per-session serialization
 - **Token streaming** — SSE endpoint for live reply rendering in the UI
 - **Vision input** — attach images to prompts (all chat adapters support image input)
@@ -156,11 +156,11 @@ sequenceDiagram
 
 ## Feature flows
 
-The current composer selects one intent, mapped to a typed text mode or an explicit workflow action. `Home.tsx` calls Auto routing only for ordinary text chat; selecting Search, Research, Safe Tools, or Draft enters its own server-owned agent workflow instead. The backend owns tool policy, limits, provider calls, and evidence. An Auto classification of "Research" does **not** run Tavily or prove that the answer is researched. Image generation, voice transcription, and Brain memory have separate paths.
+The composer selects one intent, mapped to a typed text mode or an explicit workflow action. For ordinary Auto text turns, `/routing/turn` selects a model, reasoning level, and—only when the prompt indicates current web information and a search backend (free search or a Tavily key) is available—a bounded web workflow. Auto always uses the server-owned Search workflow; tool calling is available only when you pick Safe Tools explicitly. Explicit Search, Research, Safe Tools, and Draft remain separate actions. An Auto classification of "Research" alone is not evidence that a search ran. Image generation, voice transcription, and Brain memory have separate paths.
 
 ### 1. Web search (Tavily by default; optional free-search-mcp)
 
-Selecting **Search** runs one bounded query through the selected search backend (up to 5 results). The backend passes source records as untrusted evidence to the selected model; it does not prepend search output to the user's prompt. Results are scoped to the run, citations use server-issued `[S#]` IDs, and the renderer opens only sources attached to that assistant message. Stop/disconnect cancels the search and prevents synthesis. Search inputs are limited to 1,000 characters; `/websearch` remains a validated compatibility endpoint, but the desktop agent mode uses `/sessions/{id}/agent/stream`.
+Selecting **Search** runs one bounded query through the selected search backend (up to 5 results). The backend passes source records as untrusted evidence to the selected model; it does not prepend search output to the user's prompt. Results are scoped to the run, citations use server-issued `[S#]` IDs, and the renderer opens only sources attached to that assistant message. Stop/disconnect cancels the search and prevents synthesis. Search inputs are limited to 1,000 characters; `/websearch` remains a validated compatibility endpoint, but the desktop agent mode uses `/sessions/{id}/agent/stream`. A bare follow-up such as "continue" or "do" after a failed search re-runs that search or asks for the subject; it never searches the literal word or builds a public query from private chat history.
 
 ```mermaid
 sequenceDiagram
@@ -427,7 +427,7 @@ On macOS/Linux use `cd apps/desktop` in the second terminal (with the same token
 
 Either edit `server/.env` before starting the backend, or from inside the app:
 
-**Profile → Advanced** — save your own provider keys, test connections (a real provider call), set a local LLM base URL/model, and on macOS ARM64 start/stop an already-installed Ollama. Select a provider/model in chat; Auto defaults to local and only uses a configured cloud provider when explicitly chosen. A visible cloud model name alone is not an opt-in: choose it from the picker for a new chat.
+**Profile → Advanced** — save your own provider keys, test connections (a real provider call), set a local LLM base URL/model, and on macOS ARM64 start/stop an already-installed Ollama. Auto tries a configured/discovered local model first; the model picker's **Allow cloud models in Auto** switch also permits configured cloud models when no eligible local model is available. Choosing a cloud model explicitly is another opt-in. A visible cloud model name alone is not consent.
 
 For Ollama (or any OpenAI-compatible local server):
 
@@ -567,8 +567,9 @@ Add a capability entry and explicit routing eligibility before exposing new mode
 ## Auto routing (text chat)
 
 - **What it does:** for an ordinary text turn, `POST /routing/turn` classifies the request as Research, Coding, or Documentation using deterministic keyword rules. Ambiguous prompts fall back to Documentation with a visible degraded reason. The backend filters candidates before selecting; a refusal is surfaced instead of silently substituting a blocked model.
-- **Where it runs:** without an explicit model choice, Auto considers only configured/discovered **loopback** text models. Choosing a configured cloud provider from the model picker opts the current chat into that provider for Auto turns; the backend resolves its configured/default model and the client sends the classified mode. A cloud-looking default label by itself is not consent. An OpenAI-compatible endpoint outside loopback is not treated as local. No Atlas-managed provider keys or free cloud quota exist.
-- **What it does not do:** a Research classification is **not** the explicit Tavily Research workflow. Auto does not perform web search, fetch pages, install models, run Safe Tools, authorize writes, or grant cloud fallback. Choose Search/Research separately for sourced web results. Citations identify sources, not independently verified claims.
+- **Where it runs:** Auto prefers configured/discovered **loopback** text models. The model picker can opt into configured cloud models, but enabling cloud does not force a cloud selection while a local model remains eligible. A manually selected configured cloud model also opts that turn in. An OpenAI-compatible endpoint outside loopback is not treated as local. An unavailable/unauthorized selected provider does not silently fall back to another provider; test or change its key in Advanced settings. No Atlas-managed provider keys or free cloud quota exist.
+- **When it searches:** a current-information prompt (for example, "latest news") may route to a bounded web run when Tavily is configured: a supported cloud model can choose offered read-only tools, while a model without native tools uses server-owned Search. Without a Tavily key the route degrades instead of claiming to have searched. A Research *mode label* is not the explicit multi-query Research workflow; choose Research for that. Neither a citation ID nor a successful search proves that the cited source supports the answer. A run with missing/invalid citations is marked partial.
+- **Reasoning and boundaries:** the UI records the selected model, route reason, and actual reasoning level on the reply. Auto's slider is a ceiling; the router may choose a lower level. Auto does not install models, authorize writes, or grant arbitrary tools. Search snippets are untrusted data.
 - **Memory/privacy:** ordinary chat may use local Brain recall; local Auto disables a separate cloud summarizer on its session, so summary/graph enrichment can be unavailable. Choosing a cloud model sends prompts (and relevant memory context, when Brain is enabled) to that provider. Voice and web search use their separately configured external services.
 
 The historical [multi-mode design](docs/superpowers/specs/2026-09-29-atlas-multi-mode-assistant-design.md) describes a broader policy/router than this first deterministic slice. See the [agentic-tools design](docs/superpowers/specs/2026-09-29-agentic-tools-design.md) for the current bounded explicit workflows and their outstanding review gates.
@@ -577,7 +578,9 @@ The historical [multi-mode design](docs/superpowers/specs/2026-09-29-atlas-multi
 
 A `v*` tag matching `apps/desktop/package.json` triggers [the macOS ARM64 workflow](.github/workflows/release-macos.yml): offline tests, typecheck, embedded-server build/smoke test, ad-hoc app-signature check, DMG integrity check, and a matching `.sha256` file. See [installation and verification instructions](apps/desktop/RELEASE.md). The checksum detects changed bytes; it is **not** a publisher signature. The app is not Developer ID signed or notarized, so on first launch macOS blocks it until you allow it in **System Settings → Privacy & Security → Open Anyway** (macOS 15 and later removed the Control-click → Open shortcut). The workflow publishes only if its gates pass; a local build or local tag alone does not publish a release.
 
-The `v1.0.2` build predates the fix for explicitly selected cloud models in Auto; `v1.0.4` and later include it along with Auto cloud opt-in, reasoning levels, and per-turn conversation context (`v1.0.3` was not published separately). `v1.0.5` adds conversation context to Research answers. `v1.0.6` adds one-click keyless web search, a Thinking panel, and fixes Research planning with local models. A downloaded DMG contains only the source at its release tag, not later working-tree changes.
+The `v1.0.2` build predates the fix for explicitly selected cloud models in Auto; `v1.0.4` and later include it along with Auto cloud opt-in, reasoning levels, and per-turn conversation context (`v1.0.3` was not published separately). `v1.0.5` adds conversation context to Research answers. `v1.0.6` adds one-click keyless web search, a Thinking panel, and fixes Research planning with local models. `v1.0.7` makes Auto web search work, resolves follow-ups in Search, caps local-model context and runaway thinking, and adds an in-app update check against GitHub Releases. A downloaded DMG contains only the source at its release tag, not later working-tree changes.
+
+A downloaded DMG contains only the source at its release tag—not subsequent merged PRs or uncommitted fixes. `npm run dev` exercises the current checkout, not an already-installed app; verify the release tag or make a new packaged build before comparing UI behavior.
 
 ## Roadmap vs current build
 

@@ -10,7 +10,7 @@ export function modeForTool(tool) {
 const EVENT_TYPES = new Set([
   'run.started', 'plan.ready', 'plan.degraded', 'tool.started', 'tool.progress',
   'tool.completed', 'tool.failed', 'source.found', 'attachment.found', 'approval.required',
-  'assistant.delta', 'run.completed', 'run.failed', 'run.cancelled'
+  'assistant.delta', 'reasoning.delta', 'run.completed', 'run.failed', 'run.cancelled'
 ])
 
 export function decodeAgentEvent(line) {

@@ -7,6 +7,7 @@ talking to. Add a provider = add a new subclass, nothing else changes.
 """
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Literal
@@ -54,11 +55,13 @@ class AdapterTurn:
     text: str
     calls: tuple[ToolCall, ...] = ()
     stop_reason: str = 'stop'
+    # The model's visible thinking, kept apart from the answer (never cited or stored).
+    reasoning: str = ''
 
 
 @dataclass(frozen=True)
 class AdapterEvent:
-    kind: Literal['text.delta', 'tool.call', 'turn.final']
+    kind: Literal['text.delta', 'reasoning.delta', 'tool.call', 'turn.final']
     text: str = ''
     call: ToolCall | None = None
     stop_reason: str = ''
@@ -69,6 +72,62 @@ class AdapterCapabilities:
     tool_calls: bool = False
     streamed_arguments: bool = False
     supported_models: tuple[str, ...] = ()
+
+
+_CONTROL_TOKEN = re.compile(r'<\|[A-Za-z0-9_]{1,40}\|>')
+_TAGS = ('<think>', '</think>')
+
+
+class ReasoningSplitter:
+    """Streams model output into ('text' | 'thinking', str) pieces: inline <think>...</think>
+    becomes thinking, and chat-template control tokens (e.g. GLM's <|begin_of_box|>) are
+    dropped. A possible tag split across chunks is held back until it can be decided."""
+
+    def __init__(self):
+        self._buffer = ''
+        self._thinking = False
+
+    def _emit(self, out: list, text: str) -> None:
+        if text:
+            out.append(('thinking' if self._thinking else 'text', text))
+
+    def feed(self, chunk: str) -> list[tuple[str, str]]:
+        self._buffer += chunk or ''
+        out: list[tuple[str, str]] = []
+        while True:
+            start = self._buffer.find('<')
+            if start < 0:
+                self._emit(out, self._buffer)
+                self._buffer = ''
+                return out
+            self._emit(out, self._buffer[:start])
+            rest = self._buffer = self._buffer[start:]
+            tag = next((t for t in _TAGS if rest.startswith(t)), None)
+            token = _CONTROL_TOKEN.match(rest)
+            if tag:
+                self._thinking = tag == '<think>'
+                self._buffer = rest[len(tag):]
+            elif token:
+                self._buffer = rest[token.end():]
+            elif any(t.startswith(rest) for t in _TAGS) or re.fullmatch(r'<\|[A-Za-z0-9_]{0,40}\|?', rest):
+                return out  # Incomplete tag; wait for the next chunk.
+            else:
+                self._emit(out, '<')
+                self._buffer = rest[1:]
+
+    def flush(self) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        self._emit(out, self._buffer)
+        self._buffer = ''
+        return out
+
+
+def split_reasoning(text: str) -> tuple[str, str]:
+    """(answer, thinking) for a complete reply."""
+    splitter = ReasoningSplitter()
+    pieces = splitter.feed(text) + splitter.flush()
+    return (''.join(t for kind, t in pieces if kind == 'text'),
+            ''.join(t for kind, t in pieces if kind == 'thinking'))
 
 
 def alternating_turns(turns: list[tuple[str, str]]) -> list[tuple[str, str]]:

@@ -221,7 +221,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict('os.environ', {'ATLAS_WEB_SEARCH_PROVIDER': 'free-search-mcp'}), patch(
             'agents.research.build_adapter', return_value=planner
         ), patch('agents.research.credentials_store.get_value', return_value=None), patch(
-            'websearch.shutil.which', return_value='/fixture/search-mcp'), patch(
+            'websearch.find_executable', return_value='/fixture/search-mcp'), patch(
             'agents.research.websearch.search', side_effect=search
         ) as upstream, patch('agents.research.fetch_page', side_effect=fetch):
             result = await research_run(AgentTurnRequest(prompt='Find a public guide', mode='research'),
@@ -238,6 +238,38 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             await research_run(AgentTurnRequest(prompt='question', mode='research'), planner,
                                'fake', None, lambda e: None, cancelled=event)
         self.assertEqual(planner.prompts, [])
+
+    def test_planner_json_from_local_models_is_parsed_leniently_but_validated_strictly(self):
+        from agents.research import EvidenceGap, parse_model_json
+        glm = ('\n```json\n{\n    "objective": "Find what Subham builds.",\n    "queries": [\n'
+               '        "Subham Karmakar Subham12R GitHub projects",\n        "Subham12R portfolio"\n    ],\n'
+               '    "freshness needs": "as needed",\n    "source criteria": ["official profiles"]\n}\n```')
+        plan = ResearchPlan.model_validate(parse_model_json(glm, ResearchPlan))
+        self.assertEqual(plan.queries, ['Subham Karmakar Subham12R GitHub projects', 'Subham12R portfolio'])
+        self.assertEqual((plan.freshness, plan.source_criteria), ('as needed', ['official profiles']))
+        prose = 'Sure! Here is the JSON: {"query": null, "reason": "enough evidence"} Hope that helps.'
+        self.assertIsNone(EvidenceGap.model_validate(parse_model_json(prose, EvidenceGap)).query)
+        with self.assertRaises(ValueError):
+            parse_model_json('no json here', ResearchPlan)
+        with self.assertRaises(ValueError):  # Still strict about content.
+            ResearchPlan.model_validate(parse_model_json('{"objective": "x", "queries": []}', ResearchPlan))
+
+    def test_citation_formats_local_models_write_are_normalized_to_issued_ids(self):
+        ids = {'S1', 'S2', 'A1'}
+        for written, expected in (
+            ('Claim (S1).', 'Claim [S1].'),
+            ('Claim 【S1】【S2】.', 'Claim [S1][S2].'),
+            ('Claim [S1; S2].', 'Claim [S1] [S2].'),
+            ('Claim [Source 1].', 'Claim [S1].'),
+            ('Claim (S1, S2).', 'Claim [S1] [S2].'),
+            ('Per S1, the claim holds.', 'Per [S1], the claim holds.'),
+            ('Claim [S 2] and file (A1).', 'Claim [S2] and file [A1].'),
+        ):
+            with self.subTest(written=written):
+                self.assertEqual(validate_citations(written, ids), (expected, []))
+        # IDs that were never issued are not invented, and ordinary prose is untouched.
+        self.assertEqual(validate_citations('Vitamin (A2) and S9 units.', ids),
+                         ('Vitamin (A2) and S9 units.', []))
 
     async def test_schema_rejects_duplicates_extra_fields_and_invalid_citations(self):
         with self.assertRaises(ValueError):

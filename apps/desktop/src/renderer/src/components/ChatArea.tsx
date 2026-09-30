@@ -292,13 +292,24 @@ function CodeBlockSkeleton({ language }: { language?: string }): React.JSX.Eleme
   )
 }
 
-function ThinkingBlock({ thinking }: { thinking?: string }): React.JSX.Element | null {
+/** The model's thinking, streamed separately from the answer. A live reply shows it open
+ * while the model thinks and collapses it once the answer starts; saved replies start
+ * collapsed and expand on click. */
+function ThinkingBlock({
+  thinking,
+  isThinking = false,
+  isLive = false
+}: {
+  thinking?: string
+  isThinking?: boolean
+  isLive?: boolean
+}): React.JSX.Element | null {
   if (!thinking) return null
 
   return (
-    <Reasoning defaultOpen={false}>
+    <Reasoning defaultOpen={isLive} isStreaming={isThinking}>
       <ReasoningTrigger />
-      <ReasoningContent>{thinking}</ReasoningContent>
+      <ReasoningContent className="max-h-72 overflow-y-auto">{thinking}</ReasoningContent>
     </Reasoning>
   )
 }
@@ -1405,7 +1416,7 @@ export default function ChatArea({
                 const lastMessage = activeChat.messages[activeChat.messages.length - 1]
                 const showPendingIndicator =
                   activeChat.isSending &&
-                  (!lastMessage || lastMessage.sender !== 'assistant' || lastMessage.content === '')
+                  (!lastMessage || lastMessage.sender !== 'assistant' || (lastMessage.content === '' && !lastMessage.thinking))
 
                 return (
                   <>
@@ -1433,7 +1444,7 @@ export default function ChatArea({
                       // otherwise render as its own near-empty bubble alongside the
                       // "Thinking..." indicator below -- skip it until real content
                       // (or an error) lands, since the indicator already covers this state.
-                      if (isStreamingMessage && message.content === '') return null
+                      if (isStreamingMessage && message.content === '' && !message.thinking) return null
 
                       return (
                         <div
@@ -1470,7 +1481,8 @@ export default function ChatArea({
                               <>
                                 <AttachmentBlocks attachments={message.attachments} />
                                 <TraceChips trace={message.trace} isStreaming={isStreamingMessage} />
-                                <ThinkingBlock thinking={message.thinking} />
+                                <ThinkingBlock thinking={message.thinking} isLive={isStreamingMessage}
+                                  isThinking={isStreamingMessage && !message.content} />
                                 <Plan key={message.planStatus === 'dismissed' ? 'closed' : 'open'}
                                   defaultOpen={message.planStatus !== 'dismissed'} isStreaming={isStreamingMessage}>
                                   <PlanHeader>
@@ -1552,7 +1564,8 @@ export default function ChatArea({
                                 <SearchTrace tool={message.tool} sources={message.sources}
                                   queries={message.queries} researchPlan={message.researchPlan} />
                                 <TraceChips trace={message.trace} isStreaming={isStreamingMessage} />
-                                <ThinkingBlock thinking={message.thinking} />
+                                <ThinkingBlock thinking={message.thinking} isLive={isStreamingMessage}
+                                  isThinking={isStreamingMessage && !message.content} />
                                 {renderReplyBody(message, isStreamingMessage, retry)}
                               </>
                             )}

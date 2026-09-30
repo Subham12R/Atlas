@@ -31,7 +31,7 @@ class WebToolTests(unittest.IsolatedAsyncioTestCase):
             return [{'title': 'Guide', 'url': 'https://example.org/', 'content': 'Excerpt'}]
         with patch.dict('os.environ', {'ATLAS_WEB_SEARCH_PROVIDER': 'free-search-mcp'}), patch(
             'tools.web.credentials_store.get_value', return_value=None
-        ), patch('websearch.shutil.which', return_value='/fixture/search-mcp'), patch(
+        ), patch('websearch.find_executable', return_value='/fixture/search-mcp'), patch(
             'tools.web.websearch.search', side_effect=free) as upstream:
             result = await search_web(ctx, SearchInput(query='guide'))
         self.assertEqual(result.source_ids, ['S1'])

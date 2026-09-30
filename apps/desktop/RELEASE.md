@@ -1,3 +1,19 @@
+## Atlas 1.0.6
+
+**Web search without an API key, in one click.** Profile → Advanced → Web search → **Set up free search**. Atlas installs [free-search-mcp](https://github.com/sweetcornna/free-search-mcp) in the background (and `uv` if needed), runs a test search, and switches over only once that works; it takes about 10 seconds. Queries still go to public search engines, with SafeSearch set to strict. You can switch back to a Tavily key at any time.
+
+**See what the model is thinking.** Replies from thinking models show a **Thinking** panel: open while the model thinks, then collapsed to "Thought for Ns". Click to expand. This works with LM Studio, Ollama, OpenRouter, Claude and Gemini. Chat-template tokens that some local models leaked into answers (such as `<|begin_of_box|>`) are removed.
+
+**"Continue" continues.** After a failed reply, "continue", "try again" or "go on" re-runs that request instead of starting over. In Web search, a bare "continue" repeats your previous search question and never searches the word itself.
+
+**Much better research and search with local models:**
+- Research builds a real multi-query plan with local thinking models; before, it silently fell back to searching your raw question.
+- Questions that name someone and then say "his" or "their" are no longer refused as "needs a subject".
+- Citations written as `(S1)`, `【S1】`, `[Source 1]` or a bare `S1` are recognized, and Web search gets one repair attempt, so fewer answers end up as "Partial: missing citations".
+- The model no longer calls your sources "untrusted evidence".
+
+Also: `npm run build:server` uses the project's `server/.venv` automatically, and the install steps are updated for macOS 15 and later.
+
 ## Atlas 1.0.5
 
 - **Research keeps the conversation.** Research answers now see the chat's earlier turns, so follow-ups like "and what about the second one?" stay on topic. Search queries still use at most the last few turns, and a bare "do" asks what to search for instead of searching the word.

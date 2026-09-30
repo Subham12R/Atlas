@@ -27,3 +27,32 @@ export function conversationHistory(
   }
   return turns
 }
+
+/** A bare "keep going" reply that carries no new request of its own. */
+const CONTINUATION =
+  /^\s*(?:continue|go on|keep going|carry on|proceed|resume|retry|try again|again|do it|do that|do|go ahead|search(?: it| that| again)?|yes|yes please|ok|okay)\s*[.!]*\s*$/i
+
+export function isContinuation(text: string): boolean {
+  return CONTINUATION.test(text)
+}
+
+const SEARCH_TOOLS = new Set(['searchWeb', 'deepResearch', 'safeTools'])
+
+/** The query a search-mode continuation stands for: the user's previous question, but only
+ * if that turn was itself a search (it already went to a search engine). Otherwise the
+ * prompt is returned unchanged and the server asks what to search for. */
+export function resolveSearchPrompt(
+  prompt: string,
+  history: { sender: 'user' | 'assistant'; content: string; tool?: string; request?: { tool: string | null } }[]
+): string {
+  if (!isContinuation(prompt)) return prompt
+  for (let i = history.length - 1; i >= 0; i--) {
+    const message = history[i]
+    if (message.sender !== 'user' || isContinuation(message.content)) continue
+    const reply = history[i + 1]
+    const searched = SEARCH_TOOLS.has(message.request?.tool ?? '') ||
+      (reply?.sender === 'assistant' && SEARCH_TOOLS.has(reply.tool ?? ''))
+    return searched ? message.content : prompt
+  }
+  return prompt
+}

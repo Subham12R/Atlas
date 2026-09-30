@@ -9,10 +9,12 @@ import asyncio
 import ipaddress
 import math
 import os
-import shutil
 from urllib.parse import urlsplit
 
 import httpx
+
+import credentials_store
+from free_search_setup import PROVIDER_KEY, find_executable
 
 _URL = "https://api.tavily.com/search"
 
@@ -22,7 +24,12 @@ class SearchUnavailable(ValueError):
 
 
 def provider() -> str:
-    selected = os.environ.get('ATLAS_WEB_SEARCH_PROVIDER', 'tavily')
+    """ATLAS_WEB_SEARCH_PROVIDER overrides the choice saved by one-click setup in Settings."""
+    selected = os.environ.get('ATLAS_WEB_SEARCH_PROVIDER')
+    if not selected:
+        saved = credentials_store.get_value(PROVIDER_KEY)
+        # An unknown saved value falls back to the default; a bad env override still fails.
+        selected = saved if saved in ('tavily', 'free-search-mcp') else 'tavily'
     if selected not in ('tavily', 'free-search-mcp'):
         raise SearchUnavailable('unknown web search provider')
     return selected
@@ -31,12 +38,20 @@ def provider() -> str:
 def require_backend(api_key: str | None) -> None:
     if provider() == 'tavily' and not api_key:
         raise SearchUnavailable('no Tavily API key configured')
-    if provider() == 'free-search-mcp' and not shutil.which('search-mcp'):
+    if provider() == 'free-search-mcp' and not find_executable('search-mcp'):
         raise SearchUnavailable('free-search-mcp is not installed (search-mcp executable missing)')
 
 
+def available(api_key: str | None) -> bool:
+    try:
+        require_backend(api_key)
+        return True
+    except SearchUnavailable:
+        return False
+
+
 async def _free_search(query: str, max_results: int) -> dict:
-    executable = shutil.which('search-mcp')
+    executable = find_executable('search-mcp')
     if not executable:
         raise SearchUnavailable('free-search-mcp is not installed (search-mcp executable missing)')
     try:
@@ -46,7 +61,9 @@ async def _free_search(query: str, max_results: int) -> dict:
         raise SearchUnavailable('MCP Python SDK is not installed') from error
     params = StdioServerParameters(command=executable, args=['--transport', 'stdio'],
                                    env={'SEARCH_MCP_DOWNLOAD_ENABLED': 'false',
-                                        'SEARCH_MCP_TRANSPORT': 'stdio'})
+                                        'SEARCH_MCP_TRANSPORT': 'stdio',
+                                        # Its default 'moderate' let adult sites into results.
+                                        'SEARCH_MCP_SAFESEARCH': 'strict'})
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -57,10 +74,22 @@ async def _free_search(query: str, max_results: int) -> dict:
     return result.structured_content
 
 
+async def search_free_raw(query: str, max_results: int) -> dict:
+    # Longer than Tavily's 20s: the local MCP server may cold-start on its first search.
+    return await asyncio.wait_for(_free_search(query, max_results), timeout=45)
+
+
+async def search_free(query: str, max_results: int = 5) -> dict:
+    data = await search_free_raw(query, max_results)
+    if not isinstance(data, dict) or not isinstance(data.get('results'), list):
+        raise SearchUnavailable('free-search-mcp returned invalid data')
+    return data
+
+
 async def search(api_key: str | None, query: str, max_results: int = 5) -> list[dict]:
     """Return bounded public hits with the same shape for either search backend."""
     if provider() == 'free-search-mcp':
-        data = await asyncio.wait_for(_free_search(query, max_results), timeout=20)
+        data = await search_free_raw(query, max_results)
     else:
         require_backend(api_key)
         async with httpx.AsyncClient(timeout=20) as client:

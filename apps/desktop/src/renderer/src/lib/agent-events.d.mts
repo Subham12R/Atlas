@@ -7,6 +7,7 @@ export type AgentEvent =
   | { type: 'source.found'; source: { source_id: string; title: string; url: string; host?: string; snippet?: string; fetched?: boolean; published_date?: string; score?: number } }
   | { type: 'attachment.found'; attachment: { source_id: string; filename: string; section: string } }
   | { type: 'assistant.delta'; text: string }
+  | { type: 'reasoning.delta'; text: string }
   | { type: 'run.completed'; status: 'completed' | 'partial'; reason?: string | null; sources?: { source_id: string; title: string; url: string; snippet?: string; host?: string; fetched?: boolean; published_date?: string; score?: number }[]; attachments?: { source_id: string; filename: string; section: string }[]; queries?: string[]; draft?: { id: string; filename: string; kind: 'research_brief' | 'comparison' | 'decision_memo' | 'readme' } | null }
   | { type: 'run.failed'; run_id?: string; code?: 'unsupported_model' | 'key_unavailable' | 'timeout' | 'budget' | 'invalid_call' | 'provider_unavailable' | 'internal'; phase?: string; reason: string }
   | { type: 'run.cancelled'; reason?: string }

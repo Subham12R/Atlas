@@ -192,6 +192,31 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
             registry.assert_not_called()
         self.assertNotIn('PRIVATE-DO-NOT-SEARCH', str(events))
 
+    def test_pronoun_guard_only_fires_when_the_prompt_names_no_subject(self):
+        from agents.runner import _needs_subject
+        for prompt in ('get me his portfolio and details', 'get me that portfolio',
+                       'what are her latest papers'):
+            self.assertTrue(_needs_subject(prompt), prompt)
+        for prompt in ('Research what Subham Karmakar (Subham12R) builds and his main projects',
+                       'who is subham12r and his projects',
+                       'who is subham karmakar and what are his projects',
+                       'find "Acme Corp" and their filings', 'what is the capital of France'):
+            self.assertFalse(_needs_subject(prompt), prompt)
+
+    async def test_bare_continuations_never_search_the_literal_word(self):
+        from tools.contracts import AgentTurnRequest
+        for prompt in ('continue', 'Try again.', 'go on'):
+            registry = type('R', (), {'calls': [], 'run': None})()
+            async def run(*args, **kwargs):
+                registry.calls.append(args)
+            registry.run = run
+            events = []
+            with patch('agents.runner.default_registry', return_value=registry):
+                await run_selected(AgentTurnRequest(prompt=prompt, mode='search_web'), object(),
+                                   'fake', None, events.append, asyncio.Event())
+            self.assertEqual(registry.calls, [], prompt)
+            self.assertIn('subject', next(e['text'] for e in events if e['type'] == 'assistant.delta'))
+
     async def test_short_do_followup_does_not_search_the_literal_word(self):
         from tools.contracts import AgentTurnRequest
         class Writer:
@@ -241,6 +266,26 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed['status'], 'completed')
         self.assertEqual(brain.metadata['source_ids'], ['S1'])
         self.assertIn('[S1]', answer['text'])
+
+    async def test_search_mode_repairs_a_missing_citation_once(self):
+        from adapters.base import AdapterTurn
+        from tools.contracts import AgentTurnRequest
+        source = {'source_id': 'S1', 'title': 'Source', 'url': 'https://example.org/',
+                  'host': 'example.org', 'snippet': 'evidence'}
+        class Registry:
+            async def run(self, *args, **kwargs):
+                return ToolResult(summary='found', data={'results': [source]}, source_ids=['S1'])
+        class Writer:
+            def __init__(self): self.turns = iter(['Subham is a developer.', 'Subham is a developer [S1].'])
+            async def run_turn(self, messages, tools): return AdapterTurn(next(self.turns))
+        events = []
+        with patch('agents.runner.default_registry', return_value=Registry()):
+            await run_selected(AgentTurnRequest(prompt='who is subham', mode='search_web'), Writer(),
+                               'fake', 'model', events.append, asyncio.Event())
+        completed = next(event for event in events if event['type'] == 'run.completed')
+        self.assertEqual(completed['status'], 'completed')
+        self.assertIn('[S1]', next(e['text'] for e in events if e['type'] == 'assistant.delta'))
+        self.assertNotIn('citation_check', [e.get('tool') for e in events if e['type'] == 'tool.failed'])
 
     async def test_private_context_does_not_offer_public_web_tools(self):
         from tools.contracts import AgentTurnRequest

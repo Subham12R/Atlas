@@ -23,8 +23,8 @@ class ReasoningMappingTests(unittest.TestCase):
         self.assertEqual(openai_effort('o4-mini', 'max'), 'high')
         self.assertIsNone(anthropic_thinking('off'))
         self.assertEqual(anthropic_thinking('max'), 16000)
-        self.assertEqual(gemini_thinking('gemini-2.5-flash', 'off'), {'thinking_budget': 0})
-        self.assertEqual(gemini_thinking('gemini-2.5-pro', 'off'), {'thinking_budget': 128})
+        self.assertEqual(gemini_thinking('gemini-2.5-flash', 'off'), {'thinking_budget': 0, 'include_thoughts': False})
+        self.assertEqual(gemini_thinking('gemini-2.5-pro', 'off'), {'thinking_budget': 128, 'include_thoughts': True})
         self.assertIsNone(gemini_thinking('gemini-1.5-flash', 'high'))
 
     def test_auto_level_follows_mode_but_never_exceeds_the_ceiling(self):

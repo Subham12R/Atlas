@@ -21,6 +21,10 @@ import {
   getLocalModels,
   getProviderSettings,
   getSearchSettings,
+  friendlyErrorMessage,
+  installFreeSearch,
+  setSearchProvider,
+  type SearchSettings,
   getVoiceSettings,
   resetAccount,
   setProviderSettings,
@@ -151,6 +155,78 @@ export function LocalRuntimeControl(): React.JSX.Element {
 
 interface ProfileProps {
   onClose: () => void
+}
+
+/** Keyless web search: one click installs free-search-mcp headless on the backend,
+ * test-searches, and selects it; or switches between it and a saved Tavily key. */
+export function FreeSearchControl({
+  tavilyConfigured
+}: {
+  tavilyConfigured: boolean
+}): React.JSX.Element {
+  const [settings, setSettings] = useState<SearchSettings | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const refresh = (): void => {
+    getSearchSettings().then(setSettings).catch(() => {})
+  }
+  useEffect(refresh, [])
+
+  const run = async (action: () => Promise<unknown>): Promise<void> => {
+    setBusy(true)
+    setError('')
+    try {
+      await action()
+    } catch (err) {
+      setError(friendlyErrorMessage(err, 'Free web search setup failed.'))
+    } finally {
+      setBusy(false)
+      refresh()
+    }
+  }
+
+  const connected = settings?.provider === 'free-search-mcp'
+  return (
+    <>
+      <div className="flex items-center gap-2 w-full rounded-lg bg-[#F1EFEA] dark:bg-[#2C2C2A] px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium text-[#2E2E2D] dark:text-[#EAE8E3]">
+            Free web search
+            {connected && (
+              <span className="ml-2 text-[11px] font-normal text-emerald-600 dark:text-emerald-400">
+                Connected
+              </span>
+            )}
+          </p>
+          <p aria-live="polite" className="text-[11px] text-[#6E6D6A] dark:text-[#9E9D9A]">
+            {busy
+              ? 'Setting up in the background. This can take up to a minute…'
+              : 'No API key needed. Queries still go to public search engines.'}
+          </p>
+        </div>
+        {connected ? (
+          tavilyConfigured && (
+            <RichButton onClick={() => void run(() => setSearchProvider('tavily'))} disabled={busy}
+              className="h-9 shrink-0 px-3 text-xs font-semibold">
+              Use Tavily
+            </RichButton>
+          )
+        ) : (
+          <RichButton
+            onClick={() => void run(() => settings?.free_search?.installed
+              ? setSearchProvider('free-search-mcp') : installFreeSearch())}
+            disabled={busy || !settings}
+            aria-busy={busy}
+            className="h-9 shrink-0 px-3 text-xs font-semibold"
+          >
+            {busy ? 'Setting up…' : settings?.free_search?.installed ? 'Use free search' : 'Set up free search'}
+          </RichButton>
+        )}
+      </div>
+      {error && <p role="alert" className="text-xs text-[#E0533C] dark:text-[#F87171]">{error}</p>}
+    </>
+  )
 }
 
 export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
@@ -988,9 +1064,10 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                     Web search
                   </h3>
                   <p className="text-[11px] text-[#6E6D6A] dark:text-[#9E9D9A] leading-relaxed">
-                    Backs the Search web and Research mode tools. From{' '}
-                    <span className="font-medium">tavily.com</span> -&gt; API Keys.
+                    Backs Web search, Research, and Auto&apos;s web lookups. Use free web search
+                    (no API key) or a Tavily key.
                   </p>
+                  <FreeSearchControl tavilyConfigured={searchConfigured} />
                   <div className="flex items-center gap-2 w-full">
                     <input
                       type="password"

@@ -37,6 +37,7 @@ class AgentTurnRequest(StrictModel):
     images: list[ImagePart] | None = Field(default=None, max_length=4)
     recent: list[RecentTurn] = Field(default_factory=list, max_length=4)
     attachments: list[TextAttachment] = Field(default_factory=list, max_length=5)
+    reasoning: Literal['off', 'low', 'medium', 'high', 'max'] | None = None
 
     @model_validator(mode='after')
     def bounded_context(self):

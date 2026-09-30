@@ -4,6 +4,8 @@ default since local servers are typically unauthenticated.
 """
 from __future__ import annotations
 
+from reasoning import local_effort
+
 from .openai_adapter import OpenAIAdapter
 from .base import AdapterCapabilities
 
@@ -20,3 +22,8 @@ class LocalAdapter(OpenAIAdapter):
                  api_key: str | None = None, debug: bool = False):
         super().__init__(api_key or "not-needed", model or DEFAULT_MODEL,
                          base_url=base_url or DEFAULT_BASE_URL, debug=debug)
+
+    def _reasoning_kwargs(self) -> dict:
+        # Non-thinking local models may reject this; OpenAIAdapter._create retries without it.
+        effort = local_effort(self.reasoning)
+        return {'reasoning_effort': effort} if effort else {}

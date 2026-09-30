@@ -67,10 +67,11 @@ it('does not dispatch automatic image requests to a text-only provider', async (
   expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/images/generate'))).toBe(false)
 })
 
-it('replays bounded same-chat context when a stored session has expired', async () => {
+it('restores the conversation and memory thread when a stored session has expired', async () => {
   Element.prototype.scrollIntoView = vi.fn()
+  const thread = 'ab'.repeat(16)
   const stored = { id: 'old-chat', title: 'Previous session', isPinned: false, timestamp: '',
-    provider: 'local', model: 'installed:7b', sessionId: 'stale', threadId: 'old-thread', messages: [
+    provider: 'local', model: 'installed:7b', sessionId: 'stale', threadId: thread, messages: [
       { id: 'u1', sender: 'user', content: 'Our project label is silverpine.', timestamp: '' },
       { id: 'a1', sender: 'assistant', content: 'silverpine is the label.', timestamp: '' },
       { id: 'u2', sender: 'user', content: 'Check again', timestamp: '' },
@@ -91,7 +92,7 @@ it('replays bounded same-chat context when a stored session has expired', async 
         ? { runtime: 'ollama', models: ['installed:7b'] }
         : path === '/routing/turn'
           ? { state: 'ready', mode: 'documentation', provider: 'local', model: 'installed:7b', reason: 'fixture' }
-          : { session_id: 'new-session', provider: 'local', thread_id: 'new-thread' }),
+          : { session_id: 'new-session', provider: 'local', thread_id: thread }),
     { headers: { 'Content-Type': 'application/json' } })
   })
   vi.stubGlobal('fetch', fetch)
@@ -99,11 +100,69 @@ it('replays bounded same-chat context when a stored session has expired', async 
   fireEvent.click(await screen.findByText('Previous session'))
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'What label did we choose?' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
-  await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/sessions/new-session/messages/stream'))).toBe(true))
-  const retry = fetch.mock.calls.find(([url]) => String(url).endsWith('/sessions/new-session/messages/stream'))
-  const prompt = JSON.parse(String(retry?.[1]?.body)).prompt
-  expect(prompt).toContain('silverpine is the label')
-  expect(prompt).not.toContain('The agent run timed out')
+  await screen.findByText('silverpine')
+  const session = fetch.mock.calls.find(([url]) => String(url).endsWith('/sessions'))
+  expect(JSON.parse(String(session?.[1]?.body))).toMatchObject({ thread_id: thread })
+  const replay = fetch.mock.calls.find(([url]) => String(url).endsWith('/sessions/new-session/messages/stream'))
+  expect(JSON.parse(String(replay?.[1]?.body)).history).toEqual([
+    { role: 'user', content: 'Our project label is silverpine.' },
+    { role: 'assistant', content: 'silverpine is the label.' },
+    { role: 'user', content: 'Check again' }
+  ])
+  await screen.findByRole('button', { name: 'Retry response' })
+})
+
+it('sends every earlier turn of the chat, including agent-mode replies, on each new turn', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', {
+    getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }),
+    getChats: async () => [], getProfile: async () => ({ name: '', avatarDataUrl: null }),
+    setChats: async () => {}
+  })
+  let turn = 0
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (path.endsWith('/agent/stream')) {
+      return new Response('data: {"type":"assistant.delta","text":"The merger closed today."}\n\ndata: {"type":"run.completed","status":"completed"}\n\n')
+    }
+    if (path.endsWith('/messages/stream')) return new Response(`data: {"text":"reply ${++turn}"}\n\n`)
+    const route = path === '/routing/turn' && JSON.parse(String(init?.body)).prompt.includes('latest')
+    return new Response(JSON.stringify(path === '/settings/providers'
+      ? { local: { configured: true, runtime: 'ollama' } }
+      : path === '/settings/providers/local/models'
+        ? { runtime: 'ollama', models: ['installed:7b'] }
+        : path === '/routing/turn'
+          ? { state: 'ready', mode: 'documentation', provider: 'local', model: 'installed:7b', reason: 'fixture',
+              tool: route ? 'searchWeb' : null }
+          : { session_id: 'session-1', provider: 'local', thread_id: 'cd'.repeat(16) }),
+    { headers: { 'Content-Type': 'application/json' } })
+  })
+  vi.stubGlobal('fetch', fetch)
+  render(<Home />)
+  await screen.findByRole('button', { name: 'Model: Auto' })
+  const send = async (text: string, reply: string): Promise<void> => {
+    fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: text } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await screen.findByText(reply)
+    await screen.findByRole('button', { name: 'Retry response' })
+  }
+  await send('My client is Acme.', 'reply 1')
+  await send('What is the latest on the merger?', 'The merger closed today.')
+  await send('Summarize what we know about my client.', 'reply 2')
+  const streams = fetch.mock.calls.filter(([url]) => String(url).endsWith('/messages/stream'))
+  expect(JSON.parse(String(streams[0]?.[1]?.body)).history).toEqual([])
+  expect(JSON.parse(String(streams[1]?.[1]?.body)).history).toEqual([
+    { role: 'user', content: 'My client is Acme.' },
+    { role: 'assistant', content: 'reply 1' },
+    { role: 'user', content: 'What is the latest on the merger?' },
+    { role: 'assistant', content: 'The merger closed today.' }
+  ])
+  const agent = fetch.mock.calls.find(([url]) => String(url).endsWith('/agent/stream'))
+  expect(JSON.parse(String(agent?.[1]?.body)).recent).toEqual([
+    { role: 'user', content: 'My client is Acme.' },
+    { role: 'assistant', content: 'reply 1' }
+  ])
+  expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/sessions'))).toHaveLength(1)
 })
 
 it('routes Auto locally before creating a session and records the decision', async () => {

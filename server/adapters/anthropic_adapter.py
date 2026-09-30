@@ -7,7 +7,7 @@ from anthropic import AsyncAnthropic
 from reasoning import anthropic_thinking
 
 from .base import (AdapterCapabilities, AdapterTurn, BaseAdapter, ImageInput,
-                   Reply, ToolCall, TurnMessage)
+                   Reply, ToolCall, TurnMessage, alternating_turns)
 
 DEFAULT_MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 4096
@@ -116,3 +116,7 @@ class AnthropicAdapter(BaseAdapter):
 
     async def new_chat(self) -> None:
         self._messages = []
+
+    def set_history(self, turns: list[tuple[str, str]]) -> None:
+        self._messages = [{'role': role, 'content': content}
+                          for role, content in alternating_turns(turns)]

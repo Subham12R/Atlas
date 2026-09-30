@@ -1,12 +1,30 @@
-## Atlas 1.0.3
+## Atlas 1.0.4
 
+**Models and routing**
+- The model picker has **Auto** (default). It uses local models first and only uses your connected cloud providers after you turn on **Allow cloud models in Auto**. Picking a specific model always uses exactly that model.
+- A **reasoning slider** (Off, Low, Med, High, Max) in the model picker controls how much the model thinks. It applies to OpenAI reasoning models, Claude (extended thinking), Gemini 2.5/3, OpenRouter, and local models that support it. In Auto, the slider is a maximum and Auto picks less for simple messages.
+- Auto now **searches the web by itself** when a message needs current information. It uses tool calls when the model supports them and the search pipeline otherwise; without a search key it answers without searching and says why.
+- Fixed new chats failing with "No permitted model" when a cloud model was shown as selected.
+
+**Conversation memory**
+- Every message now carries the chat's own recent history, so context survives app and server restarts, model switches, Auto routing changes, and web searches or plan runs in between. Recreated sessions also keep the chat's memory summary.
+
+**Chat**
+- Replies show the steps of a run (planning, searches, tools) as chips, which are saved with the chat.
+- **Retry** regenerates a reply in place and brings the original back if the retry fails. Cited sources appear as chips.
+- Select text in a reply to **Explain**, **Shorten**, or **Ask** about it.
+- Plan mode: tick the steps to run, then **Approve & run**, **Revise**, or **Dismiss**.
+- "Memory used" details are shown as cards; clicking a past conversation opens it.
+- Refreshed buttons and layout in Profile and Library.
+
+**Also includes 1.0.3** (not published separately):
 - Auto text chat can use a configured cloud model **when you explicitly select it**; otherwise Auto stays local-only.
 - One intent selector replaces the separate mode and tool controls in the composer.
 - Agent runs that fail now say why (unsupported model, missing search key, timeout, or tool limit) instead of a generic error.
 - Grouped citations such as `[S1, S3]` are validated against the sources actually issued and link correctly in chat and export; exports render all heading levels. Search and Research ask who "his/her/their" refers to instead of searching a bare pronoun.
 - Refreshed onboarding: the "Atlas" wordmark is no longer cropped, and account setup uses a WebGL flowing-gradient background (a still frame when reduced motion is on, a static gradient if WebGL is unavailable).
 
-Cloud billing and Atlas-managed inference are not available.
+Cloud billing and Atlas-managed inference are not available. Reasoning levels were checked against provider documentation and automated tests, not against every model.
 
 ## Release pipeline
 

@@ -12,6 +12,11 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 
+# One bound for every turn type; the client keeps the newest turns within it.
+MAX_HISTORY_TURNS = 20
+MAX_HISTORY_CHARS = 24000
+
+
 class RecentTurn(StrictModel):
     role: Literal['user', 'assistant']
     content: str = Field(max_length=8000)
@@ -35,13 +40,13 @@ class AgentTurnRequest(StrictModel):
     draft_kind: Literal['research_brief', 'comparison', 'decision_memo', 'readme'] = 'research_brief'
     instructions: str = Field(default='', max_length=4000)
     images: list[ImagePart] | None = Field(default=None, max_length=4)
-    recent: list[RecentTurn] = Field(default_factory=list, max_length=4)
+    recent: list[RecentTurn] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
     attachments: list[TextAttachment] = Field(default_factory=list, max_length=5)
     reasoning: Literal['off', 'low', 'medium', 'high', 'max'] | None = None
 
     @model_validator(mode='after')
     def bounded_context(self):
-        if not self.prompt.strip() or sum(len(m.content) for m in self.recent) > 8000:
+        if not self.prompt.strip() or sum(len(m.content) for m in self.recent) > MAX_HISTORY_CHARS:
             raise ValueError('empty prompt or conversation too long')
         if self.mode == 'search_web' and len(self.prompt) > 1000:
             raise ValueError('search query too long')

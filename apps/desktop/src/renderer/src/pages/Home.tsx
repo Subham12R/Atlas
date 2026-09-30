@@ -8,6 +8,7 @@ import type { Attachment, FileAttachment } from '@/components/ui/chatgpt-prompt-
 import { modeForTool, type AgentEvent } from '@/lib/agent-events.mjs'
 import type { ExecutionMode } from '@/lib/modes'
 import { supportsImageGeneration, type ComposerPreference } from '@/lib/chat-intent'
+import { conversationHistory } from '@/lib/conversation'
 
 interface UserProfile {
   name: string
@@ -64,16 +65,6 @@ function applyAttachments(content: string, attachments: Attachment[]): string {
 function splitDataUrl(dataUrl: string): { data: string; mime: string } {
   const match = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl)
   return match ? { mime: match[1], data: match[2] } : { mime: 'image/png', data: '' }
-}
-
-/** Last 2 exchanges (up to 4 messages) of the chat so far, handed to a newly
- * switched-to provider as a one-time bootstrap -- not re-injected on every
- * later turn, since that provider's own session takes over from there. */
-function buildSwitchContext(messages: Message[]): string {
-  const lastFew = messages.filter((m) => !m.content.startsWith('**Error:**')).slice(-4)
-  if (lastFew.length === 0) return ''
-  const lines = lastFew.map((m) => `${m.sender === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 1000)}`)
-  return `[Recent conversation before switching model]\n${lines.join('\n')}\n\n`
 }
 
 /** Baseline style rules applied to every request regardless of profile
@@ -542,7 +533,8 @@ function Home(): React.JSX.Element {
       const turnMode = route?.provider && route.provider !== 'local' ? route.mode : mode
       const routedProvider = route?.provider ?? provider
       const routedModel = route?.model ?? model
-      // A new route gets a new session; the previous provider context is explicitly bounded.
+      // A new route gets a new session. It keeps the chat's memory thread, and every
+      // turn carries the chat's own transcript, so switching models never drops context.
       const switchingProvider = !!baseChat.provider &&
         (baseChat.provider !== routedProvider || baseChat.model !== routedModel)
       let sessionId = baseChat.sessionId
@@ -553,7 +545,6 @@ function Home(): React.JSX.Element {
       const previousSessionId = switchingProvider ? sessionId : null
       if (switchingProvider) {
         sessionId = null
-        threadId = null
         chatProvider = routedProvider
         chatModel = routedModel
       }
@@ -562,13 +553,13 @@ function Home(): React.JSX.Element {
       if (profile) {
         promptToSend = buildPersonalizationContext(profile) + promptToSend
       }
-      if (switchingProvider || (!sessionId && history.length > 0)) {
-        promptToSend = buildSwitchContext(history) + promptToSend
-      }
+      // Bounded transcript of this chat before the current prompt (a retry excludes the
+      // reply it replaces); the server resets the session's conversation to it.
+      const transcript = conversationHistory(history)
 
       if (controller.signal.aborted) throw new ApiAborted('request aborted')
       if (!sessionId) {
-        const session = await createSession(chatProvider, false, chatModel)
+        const session = await createSession(chatProvider, false, chatModel, threadId)
         if (controller.signal.aborted) {
           closeSession(session.session_id).catch(() => {})
           throw new ApiAborted('request aborted')
@@ -718,74 +709,38 @@ function Home(): React.JSX.Element {
         )
       }
 
-      try {
-        if (agentMode !== 'chat') {
-          const recent = history
-            .filter((message) => !message.content.startsWith('**Error:**'))
-            .slice(-4)
-            .map((message) => ({
-              role: message.sender,
-              content: message.content.slice(0, 2000)
-            }))
-          await sendAgentStream(sessionId, {
+      const runTurn = (): Promise<void> => agentMode !== 'chat'
+        ? sendAgentStream(sessionId as string, {
             prompt: content,
             mode: agentMode,
             draft_kind: agentMode === 'draft' ? draftKind : undefined,
             instructions: buildFormattingRules() + (profile ? buildPersonalizationContext(profile) : ''),
             images: imagePayloads,
-            recent,
+            recent: transcript,
             reasoning,
             attachments: attachments
               .filter((att): att is FileAttachment => att.kind === 'file')
               .map((att) => ({ id: att.id, name: att.name, mime: 'text/plain', content: att.content }))
           }, handleAgentEvent, controller.signal)
-        } else {
-          await sendMessageStream(
-            sessionId,
-            promptToSend,
-            imagePayloads,
-            handleStreamToken,
-            handleMemoryRecall,
-            controller.signal,
-            turnMode,
-            reasoning
-          )
-        }
+        : sendMessageStream(sessionId as string, promptToSend, imagePayloads, handleStreamToken,
+            handleMemoryRecall, controller.signal, turnMode, reasoning, transcript)
+
+      try {
+        await runTurn()
       } catch (err) {
-        if (agentMode === 'chat' && err instanceof ApiError && err.status === 404) {
-          // session vanished (e.g. server restarted) -- transparently re-create
-          const session = await createSession(chatProvider, false, chatModel)
-          sessionId = session.session_id
-          threadId = session.thread_id
-          setChats((prev) =>
-            prev.map((chat) => (chat.id === targetChatId ? { ...chat, sessionId, threadId } : chat))
-          )
-
-          // Clear current content before retrying streaming
-          setChats((prev) =>
-            prev.map((chat) => {
-              if (chat.id !== targetChatId) return chat
-              const nextMessages = chat.messages.map((m) => {
-                if (m.id !== assistantMsgId) return m
-                return { ...m, content: '' }
-              })
-              return { ...chat, messages: nextMessages }
-            })
-          )
-
-          await sendMessageStream(
-            sessionId,
-            switchingProvider ? promptToSend : buildSwitchContext(history) + promptToSend,
-            imagePayloads,
-            handleStreamToken,
-            handleMemoryRecall,
-            controller.signal,
-            turnMode,
-            reasoning
-          )
-        } else {
-          throw err
-        }
+        if (!(err instanceof ApiError && err.status === 404)) throw err
+        // Session vanished (e.g. server restarted): recreate it on the same memory thread
+        // and replay the turn; the transcript restores the conversation.
+        const session = await createSession(chatProvider, false, chatModel, threadId)
+        sessionId = session.session_id
+        threadId = session.thread_id
+        setChats((prev) => prev.map((chat) => chat.id === targetChatId
+          ? {
+              ...chat, sessionId, threadId,
+              messages: chat.messages.map((m) => (m.id === assistantMsgId ? { ...m, content: '' } : m))
+            }
+          : chat))
+        await runTurn()
       }
 
       setChats((prev) =>

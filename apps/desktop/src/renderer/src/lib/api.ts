@@ -1,5 +1,6 @@
 // Thin client for the Atlas FastAPI backend (server/api.py).
 import { decodeAgentEvent, type AgentEvent } from './agent-events.mjs'
+import type { HistoryTurn } from './conversation'
 import type { ExecutionMode } from './modes'
 
 const DEVELOPMENT_API_BASE = import.meta.env.DEV
@@ -185,11 +186,17 @@ export function getProviders(): Promise<ProviderInfo[]> {
 export function createSession(
   provider: string,
   anonymous = false,
-  model: string | null = null
+  model: string | null = null,
+  /** Resume this chat's memory thread (summary + recall) instead of an empty one. */
+  threadId: string | null = null
 ): Promise<SessionInfo> {
   return request('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ provider, anonymous, model })
+    // Only well-formed server-issued thread IDs; anything else starts a fresh thread.
+    body: JSON.stringify({
+      provider, anonymous, model,
+      thread_id: threadId && /^[0-9a-f]{32}$/.test(threadId) ? threadId : undefined
+    })
   })
 }
 
@@ -221,13 +228,15 @@ export async function sendMessageStream(
   onMemory?: (memory: MemoryRecall) => void,
   signal?: AbortSignal,
   mode: ExecutionMode = 'auto',
-  reasoning?: ReasoningLevel
+  reasoning?: ReasoningLevel,
+  /** The chat's prior turns; the server rebuilds the conversation from them each turn. */
+  history?: HistoryTurn[]
 ): Promise<void> {
   const { url, token } = await getApiConnection()
   const res = await fetch(`${url}/sessions/${sessionId}/messages/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ prompt, images: images?.length ? images : undefined, mode, reasoning }),
+    body: JSON.stringify({ prompt, images: images?.length ? images : undefined, mode, reasoning, history }),
     signal
   })
 

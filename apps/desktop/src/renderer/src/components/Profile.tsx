@@ -11,6 +11,7 @@ import {
 import { SunIcon, MoonIcon, MonitorIcon } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
+import { RichButton } from '@/components/rich-button'
 import type { LocalRuntimeStatus } from '../../../shared/localRuntime'
 import {
   ApiError,
@@ -134,14 +135,16 @@ export function LocalRuntimeControl(): React.JSX.Element {
       >
         {runtimeStatus?.message ?? 'Checking whether Ollama is available.'}
       </p>
-      <button
+      <RichButton
         type="button"
         disabled={disabled}
         onClick={() => void run(managed ? 'stop' : 'start')}
-        className="shrink-0 rounded-md px-3 py-1.5 text-xs font-semibold text-[#2E2E2D] dark:text-[#EAE8E3] hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] disabled:opacity-50"
+        color={managed ? 'soft' : 'default'}
+        size="sm"
+        className="shrink-0 text-xs font-semibold"
       >
         {label}
-      </button>
+      </RichButton>
     </div>
   )
 }
@@ -631,73 +634,56 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
               )}
 
               <div className="flex items-center gap-2 pt-1">
-                <button
+                <RichButton
                   type="submit"
                   disabled={savingPassword}
-                  className="h-9 px-4 rounded-lg bg-[#2E2E2D] dark:bg-[#EAE8E3] text-white dark:text-[#1A1A19] text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50"
+                  className="h-9 px-4 text-xs font-semibold"
                 >
                   {hasPassword ? 'Change password' : 'Set password'}
-                </button>
+                </RichButton>
                 {hasPassword && (
-                  <button
+                  <RichButton
                     type="button"
                     onClick={handleRemovePassword}
                     disabled={savingPassword}
-                    className="h-9 px-4 rounded-lg text-xs font-semibold text-red-500 dark:text-[#F87171] hover:bg-red-50 dark:hover:bg-[#441C1A] transition-colors cursor-pointer disabled:opacity-50"
+                    color="red"
+                    className="h-9 px-4 text-xs font-semibold"
                   >
                     Remove password
-                  </button>
+                  </RichButton>
                 )}
               </div>
             </form>
           </div>
 
           {/* Appearance */}
-          <div className="flex items-center justify-between py-2 border-b border-[#E5E3DF] dark:border-[#2C2C2A]">
+          <div className="flex items-center justify-between py-2">
             <span className="text-sm font-semibold text-[#2E2E2D] dark:text-[#EAE8E3]">
               Appearance
             </span>
             {mounted && (
-              <div className="flex items-center bg-[#F1EFEA] dark:bg-[#2C2C2A] rounded-lg p-0.5 border border-[#E5E3DF] dark:border-[#2C2C2A]">
-                <button
-                  onClick={() => setTheme('light')}
-                  className={cn(
-                    'flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all cursor-pointer text-xs font-medium',
-                    theme === 'light'
-                      ? 'bg-white dark:bg-[#171717] text-[#2E2E2D] dark:text-[#EAE8E3] shadow-sm'
-                      : 'text-[#6E6D6A] dark:text-[#9E9D9A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3]'
-                  )}
-                  title="Light"
-                >
-                  <SunIcon size={15} />
-                  <span>Light</span>
-                </button>
-                <button
-                  onClick={() => setTheme('dark')}
-                  className={cn(
-                    'flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all cursor-pointer text-xs font-medium',
-                    theme === 'dark'
-                      ? 'bg-white dark:bg-[#171717] text-[#2E2E2D] dark:text-[#EAE8E3] shadow-sm'
-                      : 'text-[#6E6D6A] dark:text-[#9E9D9A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3]'
-                  )}
-                  title="Dark"
-                >
-                  <MoonIcon size={15} />
-                  <span>Dark</span>
-                </button>
-                <button
-                  onClick={() => setTheme('system')}
-                  className={cn(
-                    'flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all cursor-pointer text-xs font-medium',
-                    theme === 'system'
-                      ? 'bg-white dark:bg-[#171717] text-[#2E2E2D] dark:text-[#EAE8E3] shadow-sm'
-                      : 'text-[#6E6D6A] dark:text-[#9E9D9A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3]'
-                  )}
-                  title="System"
-                >
-                  <MonitorIcon size={15} />
-                  <span>System</span>
-                </button>
+              <div className="flex items-center gap-1.5">
+                {(
+                  [
+                    { id: 'light', label: 'Light', Icon: SunIcon },
+                    { id: 'dark', label: 'Dark', Icon: MoonIcon },
+                    { id: 'system', label: 'System', Icon: MonitorIcon }
+                  ] as const
+                ).map(({ id, label, Icon }) => (
+                  <RichButton
+                    key={id}
+                    type="button"
+                    size="sm"
+                    color={theme === id ? 'default' : 'soft'}
+                    aria-pressed={theme === id}
+                    onClick={() => setTheme(id)}
+                    title={label}
+                    className="h-8 px-3 text-xs"
+                  >
+                    <Icon size={15} />
+                    <span>{label}</span>
+                  </RichButton>
+                ))}
               </div>
             )}
           </div>
@@ -757,23 +743,28 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                   { id: 'teacher', label: 'Teacher', desc: 'Conceptual, educational' },
                   { id: 'creative', label: 'Creative', desc: 'Expressive, exploratory' }
                 ].map((style) => (
-                  <button
+                  <RichButton
                     key={style.id}
+                    type="button"
+                    color={responseStyle === style.id ? 'default' : 'soft'}
+                    aria-pressed={responseStyle === style.id}
                     onClick={() => handleResponseStyleChange(style.id)}
-                    className={cn(
-                      'flex flex-col items-start gap-1 p-3 rounded-xl border text-left cursor-pointer transition-all',
-                      responseStyle === style.id
-                        ? 'border-[#2E2E2D] dark:border-[#EAE8E3] bg-[#F1EFEA] dark:bg-[#2C2C2A] shadow-sm'
-                        : 'border-[#E5E3DF] dark:border-[#2C2C2A] hover:bg-[#F1EFEA]/40 dark:hover:bg-[#2C2C2A]/40 bg-transparent'
-                    )}
+                    className="h-auto justify-start whitespace-normal rounded-xl p-3 text-left"
                   >
-                    <span className="text-xs font-semibold text-[#2E2E2D] dark:text-[#EAE8E3]">
-                      {style.label}
+                    <span className="flex flex-col items-start gap-1">
+                      <span className="text-xs font-semibold">{style.label}</span>
+                      <span
+                        className={cn(
+                          'text-[10px] font-normal leading-tight',
+                          responseStyle === style.id
+                            ? 'text-white/70 dark:text-zinc-900/65'
+                            : 'text-[#6E6D6A] dark:text-[#9E9D9A]'
+                        )}
+                      >
+                        {style.desc}
+                      </span>
                     </span>
-                    <span className="text-[10px] text-[#6E6D6A] dark:text-[#9E9D9A] leading-tight">
-                      {style.desc}
-                    </span>
-                  </button>
+                  </RichButton>
                 ))}
               </div>
             </div>
@@ -838,21 +829,22 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                             className="flex-1 min-w-0 h-9 rounded-lg px-3 bg-[#F1EFEA] dark:bg-[#2C2C2A] text-sm text-[#2E2E2D] dark:text-[#EAE8E3] outline-none placeholder:text-[#9E9D9A]"
                           />
                           {configured ? (
-                            <button
+                            <RichButton
                               onClick={() => handleDisconnect(p.id)}
                               disabled={savingProvider === p.id}
-                              className="h-9 px-3 rounded-lg text-xs font-semibold text-red-500 dark:text-[#F87171] hover:bg-red-50 dark:hover:bg-[#441C1A] transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+                              color="red"
+                              className="h-9 shrink-0 px-3 text-xs font-semibold"
                             >
                               {savingProvider === p.id ? 'Disconnecting...' : 'Disconnect'}
-                            </button>
+                            </RichButton>
                           ) : (
-                            <button
+                            <RichButton
                               onClick={() => handleSaveKey(p.id)}
                               disabled={savingProvider === p.id || !keyInputs[p.id]?.trim()}
-                              className="h-9 px-3 rounded-lg bg-[#2E2E2D] dark:bg-[#EAE8E3] text-white dark:text-[#1A1A19] text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 shrink-0"
+                              className="h-9 shrink-0 px-3 text-xs font-semibold"
                             >
                               {savedProvider === p.id ? 'Saved' : 'Save'}
-                            </button>
+                            </RichButton>
                           )}
                         </div>
                         {p.id === 'openrouter' && configured && (
@@ -951,7 +943,7 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                     />
                   </div>
                   <div className="flex items-center gap-2 pt-1">
-                    <button
+                    <RichButton
                       onClick={() => {
                         void setProviderSettings('local', {
                           base_url: localBaseUrl,
@@ -964,17 +956,18 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                           refreshProviderSettings()
                         })
                       }}
-                      className="h-9 px-4 rounded-lg border border-[#E5E3DF] dark:border-[#2C2C2A] text-xs font-semibold hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] transition-colors cursor-pointer"
+                      color="soft"
+                      className="h-9 px-4 text-xs font-semibold"
                     >
                       Refresh models
-                    </button>
-                    <button
+                    </RichButton>
+                    <RichButton
                       onClick={handleTestLocal}
                       disabled={testingLocal}
-                      className="h-9 px-4 rounded-lg bg-[#2E2E2D] dark:bg-[#EAE8E3] text-white dark:text-[#1A1A19] text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50"
+                      className="h-9 px-4 text-xs font-semibold"
                     >
                       {testingLocal ? 'Testing connection...' : 'Test connection'}
-                    </button>
+                    </RichButton>
                   </div>
                   {localTestResult && (
                     <p
@@ -1007,21 +1000,22 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                       className="flex-1 min-w-0 h-9 rounded-lg px-3 bg-[#F1EFEA] dark:bg-[#2C2C2A] text-sm text-[#2E2E2D] dark:text-[#EAE8E3] outline-none placeholder:text-[#9E9D9A]"
                     />
                     {searchConfigured ? (
-                      <button
+                      <RichButton
                         onClick={handleDisconnectSearch}
                         disabled={savingSearch}
-                        className="h-9 px-3 rounded-lg text-xs font-semibold text-red-500 dark:text-[#F87171] hover:bg-red-50 dark:hover:bg-[#441C1A] transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+                        color="red"
+                        className="h-9 shrink-0 px-3 text-xs font-semibold"
                       >
                         {savingSearch ? 'Disconnecting...' : 'Disconnect'}
-                      </button>
+                      </RichButton>
                     ) : (
-                      <button
+                      <RichButton
                         onClick={handleSaveSearchKey}
                         disabled={savingSearch || !searchKeyInput.trim()}
-                        className="h-9 px-3 rounded-lg bg-[#2E2E2D] dark:bg-[#EAE8E3] text-white dark:text-[#1A1A19] text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 shrink-0"
+                        className="h-9 shrink-0 px-3 text-xs font-semibold"
                       >
                         {savedSearch ? 'Saved' : 'Save'}
-                      </button>
+                      </RichButton>
                     )}
                   </div>
                 </div>
@@ -1043,21 +1037,22 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                       className="flex-1 min-w-0 h-9 rounded-lg px-3 bg-[#F1EFEA] dark:bg-[#2C2C2A] text-sm text-[#2E2E2D] dark:text-[#EAE8E3] outline-none placeholder:text-[#9E9D9A]"
                     />
                     {voiceConfigured ? (
-                      <button
+                      <RichButton
                         onClick={handleDisconnectVoice}
                         disabled={savingVoice}
-                        className="h-9 px-3 rounded-lg text-xs font-semibold text-red-500 dark:text-[#F87171] hover:bg-red-50 dark:hover:bg-[#441C1A] transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+                        color="red"
+                        className="h-9 shrink-0 px-3 text-xs font-semibold"
                       >
                         {savingVoice ? 'Disconnecting...' : 'Disconnect'}
-                      </button>
+                      </RichButton>
                     ) : (
-                      <button
+                      <RichButton
                         onClick={handleSaveVoiceKey}
                         disabled={savingVoice || !voiceKeyInput.trim()}
-                        className="h-9 px-3 rounded-lg bg-[#2E2E2D] dark:bg-[#EAE8E3] text-white dark:text-[#1A1A19] text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 shrink-0"
+                        className="h-9 shrink-0 px-3 text-xs font-semibold"
                       >
                         {savedVoice ? 'Saved' : 'Save'}
-                      </button>
+                      </RichButton>
                     )}
                   </div>
                 </div>
@@ -1088,28 +1083,31 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
 
             {confirmingDelete ? (
               <div className="flex items-center gap-2">
-                <button
+                <RichButton
                   onClick={handleDeleteAccount}
                   disabled={deletingAccount}
-                  className="h-9 px-4 rounded-lg bg-red-500 text-white text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50"
+                  color="red"
+                  className="h-9 px-4 text-xs font-semibold"
                 >
                   {deletingAccount ? 'Deleting...' : 'Yes, delete everything'}
-                </button>
-                <button
+                </RichButton>
+                <RichButton
                   onClick={() => setConfirmingDelete(false)}
                   disabled={deletingAccount}
-                  className="h-9 px-4 rounded-lg text-xs font-semibold text-[#6E6D6A] dark:text-[#9E9D9A] hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] transition-colors cursor-pointer disabled:opacity-50"
+                  color="soft"
+                  className="h-9 px-4 text-xs font-semibold"
                 >
                   Cancel
-                </button>
+                </RichButton>
               </div>
             ) : (
-              <button
+              <RichButton
                 onClick={() => setConfirmingDelete(true)}
-                className="h-9 px-4 rounded-lg text-xs font-semibold text-red-500 dark:text-[#F87171] border border-red-200 dark:border-[#441C1A] hover:bg-red-50 dark:hover:bg-[#441C1A] transition-colors cursor-pointer"
+                color="red"
+                className="h-9 px-4 text-xs font-semibold"
               >
                 Delete account
-              </button>
+              </RichButton>
             )}
           </div>
         </div>

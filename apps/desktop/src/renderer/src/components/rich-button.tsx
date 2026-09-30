@@ -2,8 +2,11 @@ import * as React from 'react'
 import { Slot } from '@radix-ui/react-slot'
 import { cn } from '@/lib/utils'
 
+/** `soft` is the light, raised neutral for secondary actions and unselected choices;
+ * every other colour is a solid gradient for primary/semantic actions. */
 type Color =
   | 'default'
+  | 'soft'
   | 'blue'
   | 'purple'
   | 'pink'
@@ -39,6 +42,7 @@ interface RichButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> 
 
 const colorMap: Record<Color, string> = {
   default: 'from-zinc-900/85 to-zinc-900 dark:from-zinc-100/85 dark:to-zinc-100',
+  soft: 'from-white to-zinc-100 dark:from-zinc-800 dark:to-zinc-700/80 border-zinc-950/10 shadow-sm shadow-zinc-950/10 inset-shadow-white dark:border dark:border-white/10 dark:inset-shadow-white/10',
   emerald: 'from-emerald-600/85 to-emerald-600 dark:from-emerald-600/75',
   blue: 'from-blue-600/85 to-blue-600 dark:from-blue-600/75',
   purple: 'from-purple-600/85 to-purple-600 dark:from-purple-600/75',
@@ -65,6 +69,7 @@ const colorMap: Record<Color, string> = {
 
 const textShadowMap: Record<Color, string> = {
   default: '[text-shadow:0_1px_0_rgb(0,0,0)] dark:[text-shadow:0_1px_0_rgb(255,255,255)]',
+  soft: '[text-shadow:0_1px_0_rgb(255,255,255)] dark:[text-shadow:0_1px_0_rgb(0,0,0)]',
   emerald: '[text-shadow:0_1px_0_var(--color-emerald-800)]',
   blue: '[text-shadow:0_1px_0_var(--color-blue-800)]',
   purple: '[text-shadow:0_1px_0_var(--color-purple-800)]',
@@ -104,7 +109,12 @@ const RichButton = React.forwardRef<HTMLButtonElement, RichButtonProps>(
     const colorClasses = colorMap[color]
     const textShadowClasses = textShadowMap[color]
     const sizeClasses = sizeMap[size]
-    const textColor = color === 'default' ? 'text-white dark:text-zinc-900' : 'text-white'
+    const textColor =
+      color === 'default'
+        ? 'text-white dark:text-zinc-900'
+        : color === 'soft'
+          ? 'text-zinc-800 dark:text-zinc-100'
+          : 'text-white'
 
     return (
       <Comp

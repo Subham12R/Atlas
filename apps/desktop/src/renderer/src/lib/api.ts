@@ -485,8 +485,28 @@ export function generateImage(
 }
 
 // ---- web search (Tavily) -------------------------------------------------
-export function getSearchSettings(): Promise<{ configured: boolean }> {
+export type SearchProvider = 'tavily' | 'free-search-mcp'
+
+export interface SearchSettings {
+  /** A Tavily key is saved. */
+  configured: boolean
+  provider?: SearchProvider
+  /** The selected provider can search right now. */
+  available?: boolean
+  free_search?: { installed: boolean }
+}
+
+export function getSearchSettings(): Promise<SearchSettings> {
   return request('/settings/search')
+}
+
+/** One click: installs free-search-mcp in the background, test-searches, then selects it. */
+export function installFreeSearch(): Promise<{ installed: boolean; provider: SearchProvider }> {
+  return request('/settings/search/free-search/install', { method: 'POST' })
+}
+
+export function setSearchProvider(provider: SearchProvider): Promise<{ provider: SearchProvider }> {
+  return request('/settings/search/provider', { method: 'PUT', body: JSON.stringify({ provider }) })
 }
 
 export function setSearchSettings(apiKey: string): Promise<{ ok: boolean }> {

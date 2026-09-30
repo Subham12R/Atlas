@@ -20,9 +20,15 @@ jobs:
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      # setup-python's macOS builds lack loadable SQLite extensions, which the memory
+      # store (sqlite-vec) needs at runtime. PyInstaller bundles this same Python into
+      # the app, so a build without it would ship with broken memory. Use Homebrew's.
+      - name: Set up Python with loadable SQLite extensions
+        run: |
+          brew install python@3.12
+          "$(brew --prefix python@3.12)/bin/python3.12" -m venv "$RUNNER_TEMP/python"
+          echo "$RUNNER_TEMP/python/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/python/bin/python" -c "import sqlite3; sqlite3.connect(':memory:').enable_load_extension(True); print('sqlite extensions: ok')"
 
       - name: Check release tag matches app version
         run: |

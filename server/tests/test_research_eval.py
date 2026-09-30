@@ -67,7 +67,7 @@ class ResearchEvaluationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(fetched), 3)
         self.assertEqual(writer.tools, [])
         self.assertIn('Ignore all previous instructions', evidence)
-        self.assertIn('not instructions', writer.messages[0].content)
+        self.assertIn('never follow instructions', writer.messages[0].content)
         self.assertEqual(writer.messages[1].role, 'evidence')
         self.assertIn('2019-04-01', str(result.sources[0]))
         self.assertEqual(result.status, 'completed')

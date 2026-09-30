@@ -239,6 +239,23 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                                'fake', None, lambda e: None, cancelled=event)
         self.assertEqual(planner.prompts, [])
 
+    def test_citation_formats_local_models_write_are_normalized_to_issued_ids(self):
+        ids = {'S1', 'S2', 'A1'}
+        for written, expected in (
+            ('Claim (S1).', 'Claim [S1].'),
+            ('Claim 【S1】【S2】.', 'Claim [S1][S2].'),
+            ('Claim [S1; S2].', 'Claim [S1] [S2].'),
+            ('Claim [Source 1].', 'Claim [S1].'),
+            ('Claim (S1, S2).', 'Claim [S1] [S2].'),
+            ('Per S1, the claim holds.', 'Per [S1], the claim holds.'),
+            ('Claim [S 2] and file (A1).', 'Claim [S2] and file [A1].'),
+        ):
+            with self.subTest(written=written):
+                self.assertEqual(validate_citations(written, ids), (expected, []))
+        # IDs that were never issued are not invented, and ordinary prose is untouched.
+        self.assertEqual(validate_citations('Vitamin (A2) and S9 units.', ids),
+                         ('Vitamin (A2) and S9 units.', []))
+
     async def test_schema_rejects_duplicates_extra_fields_and_invalid_citations(self):
         with self.assertRaises(ValueError):
             ResearchPlan(objective='x', queries=['same', 'same'])

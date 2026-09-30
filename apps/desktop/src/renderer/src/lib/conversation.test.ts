@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { MAX_HISTORY_CHARS, MAX_HISTORY_TURNS, conversationHistory, isContinuation, resolveSearchPrompt } from './conversation'
+import { MAX_HISTORY_CHARS, MAX_HISTORY_TURNS, conversationHistory, followsSearch, isContinuation, resolveSearchPrompt } from './conversation'
 
 it('keeps the newest turns in order and skips errors and empty placeholders', () => {
   expect(conversationHistory([
@@ -48,4 +48,19 @@ it('reuses the previous search question for a search-mode continuation, never pr
     { sender: 'assistant' as const, content: 'Noted.' }
   ]
   expect(resolveSearchPrompt('search it', privateChat)).toBe('search it')
+})
+
+it('keeps searching for a short follow-up to a searched turn, but not after plain chat', () => {
+  const searched = [
+    { sender: 'user' as const, content: 'who is dr sajal saha', request: { tool: 'searchWeb' } },
+    { sender: 'assistant' as const, content: 'Several people share that name.', tool: 'searchWeb' }
+  ]
+  expect(followsSearch('from adamas university', searched)).toBe(true)
+  expect(followsSearch('explain in detail how transformers compute attention over very long sequences', searched)).toBe(false)
+  const plain = [
+    { sender: 'user' as const, content: 'hi there' },
+    { sender: 'assistant' as const, content: 'Hello!' }
+  ]
+  expect(followsSearch('from adamas university', plain)).toBe(false)
+  expect(followsSearch('from adamas university', [])).toBe(false)
 })

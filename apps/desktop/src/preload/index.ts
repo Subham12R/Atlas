@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { LocalRuntimeId, LocalRuntimeStatus } from '../shared/localRuntime'
+import type { UpdateResult } from '../shared/update'
 
 export interface Profile {
   name: string
@@ -43,6 +44,8 @@ const api = {
     ipcRenderer.invoke('local-runtime:start', runtimeId),
   stopLocalRuntime: (runtimeId: LocalRuntimeId): Promise<LocalRuntimeStatus> =>
     ipcRenderer.invoke('local-runtime:stop', runtimeId),
+  checkForUpdate: (): Promise<UpdateResult> => ipcRenderer.invoke('update:check'),
+  openUpdate: (kind: 'release' | 'download'): Promise<boolean> => ipcRenderer.invoke('update:open', kind),
   getChats: (): Promise<unknown[]> => ipcRenderer.invoke('get-chats'),
   setChats: (chats: unknown[]): Promise<void> => ipcRenderer.invoke('set-chats', chats),
   minimizeWindow: (): void => ipcRenderer.send('window-minimize'),

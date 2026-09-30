@@ -254,7 +254,7 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
             adapter = Writer()
             thread_id = 'thread'
             def prepare_agent_turn(self, prompt): return '', object()
-            async def finish_agent_turn(self, prompt, answer, recall, metadata):
+            async def finish_agent_turn(self, prompt, answer, recall, metadata, web_sourced=False):
                 self.metadata = metadata
         brain = Brain()
         events = []
@@ -298,7 +298,7 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         class Brain:
             def __init__(self): self.adapter = Writer(); self.thread_id = 'thread'
             def prepare_agent_turn(self, prompt): return 'private recall', None
-            async def finish_agent_turn(self, *args): pass
+            async def finish_agent_turn(self, *args, **kwargs): pass
         cases = [
             (AgentTurnRequest(prompt='question', mode='tools'), Brain()),
             (AgentTurnRequest(prompt='question', mode='tools', attachments=[{

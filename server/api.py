@@ -128,6 +128,8 @@ class TurnRouteRequest(BaseModel):
     # Exact level for a picked model; the ceiling when Auto picks the model.
     reasoning: ReasoningLevel = 'medium'
     agent_mode: Literal['chat', 'search_web', 'research', 'plan', 'write', 'draft', 'tools'] = 'chat'
+    # The previous assistant turn searched the web, so a short follow-up should too.
+    follows_search: bool = False
 
 
 _CLOUD_ORDER = ('openai', 'anthropic', 'gemini', 'openrouter')  # Stable; no quality/price claims.
@@ -171,7 +173,8 @@ async def route_turn(body: TurnRouteRequest):
     return auto_route_turn(body.prompt, body.mode, body.agent_mode, candidates,
                            ExecutionPolicy(allow_cloud=cloud_preference or body.allow_cloud),
                            preference, body.reasoning,
-                           websearch.available(credentials_store.get_value(TAVILY_KEY)))
+                           websearch.available(credentials_store.get_value(TAVILY_KEY)),
+                           body.follows_search)
 
 
 class SessionCreate(BaseModel):
@@ -368,7 +371,12 @@ def _err_detail(e: Exception) -> str:
     with the full raw response dict; their `.message` attribute is the clean,
     human-readable string underneath. Falls back to str(e) for exceptions
     (OpenAI's, Anthropic's, plain network errors) that don't have one."""
-    return getattr(e, "message", None) or str(e)
+    code = getattr(e, "status_code", None) or getattr(e, "code", None)
+    text = getattr(e, "message", None) or str(e)
+    if code in (429, 500, 502, 503, 504) or re.search(r"UNAVAILABLE|overloaded|high demand", text, re.I):
+        return ("The model provider is busy or rate-limited right now. Try again in a moment "
+                "or switch model.")
+    return text
 
 
 @app.get("/providers")

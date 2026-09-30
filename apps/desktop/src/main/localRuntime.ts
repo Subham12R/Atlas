@@ -39,7 +39,10 @@ function runtimeEnvironment(): NodeJS.ProcessEnv {
     TMPDIR: process.env.TMPDIR ?? '/tmp',
     // ponytail: standard macOS install paths only; add custom-path support when officially supported.
     PATH: '/opt/homebrew/bin:/usr/local/bin:/Applications/Ollama.app/Contents/Resources:/usr/bin:/bin',
-    OLLAMA_HOST: '127.0.0.1:11434'
+    OLLAMA_HOST: '127.0.0.1:11434',
+    // Ollama's default context is 2-4k tokens; the /v1 API cannot raise it per request, so web
+    // evidence, memory and instructions would be silently truncated. Keep in sync with server/budget.py.
+    OLLAMA_CONTEXT_LENGTH: '8192'
   }
 }
 

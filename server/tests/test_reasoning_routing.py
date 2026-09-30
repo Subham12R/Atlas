@@ -82,7 +82,7 @@ class AutoRoutePolicyTests(unittest.TestCase):
     def test_auto_calls_tools_for_current_information(self):
         keys = {'OPENAI_API_KEY': 'k', 'TAVILY_API_KEY': 't'}
         cloud = self.route(keys, [], prompt="What's the latest news on the merger?", allow_cloud=True)
-        self.assertEqual((cloud['tool'], cloud['reasoning']), ('safeTools', 'low'))
+        self.assertEqual((cloud['tool'], cloud['reasoning']), ('searchWeb', 'low'))
         local = self.route(keys, ['installed:7b'], prompt="What's the latest news on the merger?")
         self.assertEqual((local['provider'], local['tool']), ('local', 'searchWeb'))
         offline = self.route({}, ['installed:7b'], prompt="What's the latest news on the merger?")

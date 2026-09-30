@@ -38,21 +38,45 @@ export function isContinuation(text: string): boolean {
 
 const SEARCH_TOOLS = new Set(['searchWeb', 'deepResearch', 'safeTools'])
 
+type SearchTurn = { sender: 'user' | 'assistant'; content: string; tool?: string; request?: { tool: string | null } }
+
+/** Did this user turn (at index i) go to a search engine? True when the turn or its reply says so. */
+function wasSearched(history: SearchTurn[], i: number): boolean {
+  const reply = history[i + 1]
+  return SEARCH_TOOLS.has(history[i].request?.tool ?? '') ||
+    (reply?.sender === 'assistant' && SEARCH_TOOLS.has(reply.tool ?? ''))
+}
+
+/** Mirrors needs_rewrite in server/agents/query_rewrite.py: a short message, or one that opens
+ * with a preposition/conjunction/pointer, leans on the previous turn for its subject. */
+const FRAGMENT =
+  /^\s*(?:from|at|in|of|on|for|with|and|or|also|but|what about|how about|the|that|this|those|these|he|she|they|it|same|more|another|other|which)\b/i
+
+export function isFragmentFollowUp(text: string): boolean {
+  return text.trim().split(/\s+/).length <= 8 || FRAGMENT.test(text)
+}
+
+/** A short follow-up to a turn that searched the web ("from adamas university"): Auto keeps
+ * searching instead of falling back to a plain answer with no sources. */
+export function followsSearch(prompt: string, history: SearchTurn[]): boolean {
+  if (!isFragmentFollowUp(prompt)) return false
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].sender !== 'user') continue
+    return wasSearched(history, i)
+  }
+  return false
+}
+
 /** The query a search-mode continuation stands for: the user's previous question, but only
  * if that turn was itself a search (it already went to a search engine). Otherwise the
- * prompt is returned unchanged and the server asks what to search for. */
-export function resolveSearchPrompt(
-  prompt: string,
-  history: { sender: 'user' | 'assistant'; content: string; tool?: string; request?: { tool: string | null } }[]
-): string {
+ * prompt is returned unchanged and the server asks what to search for. Other short follow-ups
+ * are sent as-is: the server rewrites them into a standalone query from the visible chat. */
+export function resolveSearchPrompt(prompt: string, history: SearchTurn[]): string {
   if (!isContinuation(prompt)) return prompt
   for (let i = history.length - 1; i >= 0; i--) {
     const message = history[i]
     if (message.sender !== 'user' || isContinuation(message.content)) continue
-    const reply = history[i + 1]
-    const searched = SEARCH_TOOLS.has(message.request?.tool ?? '') ||
-      (reply?.sender === 'assistant' && SEARCH_TOOLS.has(reply.tool ?? ''))
-    return searched ? message.content : prompt
+    return wasSearched(history, i) ? message.content : prompt
   }
   return prompt
 }

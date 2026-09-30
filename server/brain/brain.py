@@ -52,11 +52,11 @@ class Brain:
                              self.thread_id, self.topk, self.budget, self.max_distance)
 
     async def finish_agent_turn(self, prompt: str, final_text: str, recall,
-                                safe_metadata: dict | None = None):
+                                safe_metadata: dict | None = None, web_sourced: bool = False):
         self._store_turn("user", self._memory_text(prompt))
         self._store_turn("assistant", final_text, meta=safe_metadata)
         if self.auto_summary:
-            await self._enrich(prompt, final_text)
+            await self._enrich(prompt, final_text, facts=not web_sourced)
 
     async def send(self, prompt: str, images=None):
         context, recall = self.prepare_agent_turn(prompt)
@@ -115,12 +115,13 @@ class Brain:
         self.store.add_message(self.thread_id, role, content, self.provider,
                                meta=meta, chunks=list(zip(texts, vecs)))
 
-    async def _enrich(self, user: str, assistant: str) -> None:
+    async def _enrich(self, user: str, assistant: str, facts: bool = True) -> None:
+        # Facts from web answers are unverified (namesakes get merged); keep the summary only.
         try:
             summary = await self.summarizer.update_summary(
                 self.store.get_summary(self.thread_id), user, assistant)
             self.store.set_summary(self.thread_id, summary)
-            for s, r, d in await self.summarizer.extract_triples(user, assistant):
+            for s, r, d in (await self.summarizer.extract_triples(user, assistant) if facts else []):
                 sid = self.store.upsert_entity(s, "", self.thread_id)
                 did = self.store.upsert_entity(d, "", self.thread_id)
                 self.store.add_edge(sid, did, r, self.thread_id)

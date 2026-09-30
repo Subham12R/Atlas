@@ -44,6 +44,7 @@ export interface RouteOptions {
   allowCloud?: boolean
   reasoning?: ReasoningLevel
   agentMode?: AgentTurnRequest['mode']
+  followsSearch?: boolean
 }
 
 export function routeTurn(
@@ -57,7 +58,8 @@ export function routeTurn(
     method: 'POST',
     body: JSON.stringify({
       prompt, mode, preference,
-      allow_cloud: options.allowCloud, reasoning: options.reasoning, agent_mode: options.agentMode
+      allow_cloud: options.allowCloud, reasoning: options.reasoning, agent_mode: options.agentMode,
+      follows_search: options.followsSearch
     }),
     signal
   })

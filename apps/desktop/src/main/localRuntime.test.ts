@@ -64,6 +64,7 @@ it('starts only the registered Ollama command with fixed args, no shell, and a m
   expect(options).toBeDefined()
   expect(options.stdio).toBe('ignore')
   expect(options.env.OLLAMA_HOST).toBe('127.0.0.1:11434')
+  expect(options.env.OLLAMA_CONTEXT_LENGTH).toBe('8192')
   expect(options.env.ATLAS_API_TOKEN).toBeUndefined()
 })
 

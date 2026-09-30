@@ -13,6 +13,7 @@ import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
 import { RichButton } from '@/components/rich-button'
 import type { LocalRuntimeStatus } from '../../../shared/localRuntime'
+import type { UpdateResult } from '../../../shared/update'
 import {
   ApiError,
   deleteProviderSettings,
@@ -226,6 +227,74 @@ export function FreeSearchControl({
       </div>
       {error && <p role="alert" className="text-xs text-[#E0533C] dark:text-[#F87171]">{error}</p>}
     </>
+  )
+}
+
+/** Checks GitHub Releases for a newer Atlas. The app is not code-signed, so updating means
+ * downloading the new build from the release and installing it over the old one. */
+export function UpdateControl(): React.JSX.Element {
+  const [result, setResult] = useState<UpdateResult | null>(null)
+  const [busy, setBusy] = useState(true)
+
+  const run = (): Promise<void> =>
+    window.api
+      .checkForUpdate()
+      .then(setResult)
+      .catch(() => setResult({ status: 'error', current: '', message: 'Could not check for updates.' }))
+      .finally(() => setBusy(false))
+  const check = (): void => {
+    setBusy(true)
+    void run()
+  }
+  useEffect(() => {
+    void run()
+  }, [])
+
+  const available = result?.status === 'available' ? result : null
+  return (
+    <div className="space-y-2 w-full">
+      <div className="flex items-center gap-2 w-full rounded-lg bg-[#F1EFEA] dark:bg-[#2C2C2A] px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium text-[#2E2E2D] dark:text-[#EAE8E3]">
+            Updates
+            {result?.current && (
+              <span className="ml-2 text-[11px] font-normal text-[#6E6D6A] dark:text-[#9E9D9A]">
+                Atlas {result.current}
+              </span>
+            )}
+          </p>
+          <p aria-live="polite" className="text-[11px] text-[#6E6D6A] dark:text-[#9E9D9A]">
+            {busy ? 'Checking GitHub releases…'
+              : available ? `Atlas ${available.latest} is available.`
+              : result?.status === 'current' ? 'You are on the latest version.'
+              : result?.status === 'error' ? result.message : ''}
+          </p>
+        </div>
+        {available ? (
+          <RichButton
+            onClick={() => void window.api.openUpdate(available.hasDownload ? 'download' : 'release')}
+            className="h-9 shrink-0 px-3 text-xs font-semibold"
+          >
+            {available.hasDownload ? 'Download' : 'View release'}
+          </RichButton>
+        ) : (
+          <RichButton onClick={check} disabled={busy} aria-busy={busy}
+            className="h-9 shrink-0 px-3 text-xs font-semibold">
+            {busy ? 'Checking…' : 'Check for updates'}
+          </RichButton>
+        )}
+      </div>
+      {available && (
+        <details className="text-[11px] text-[#6E6D6A] dark:text-[#9E9D9A]">
+          <summary className="cursor-pointer">What&apos;s new in {available.name}</summary>
+          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap font-sans">{available.notes || 'No release notes.'}</pre>
+          <button type="button" className="mt-1 underline"
+            onClick={() => void window.api.openUpdate('release')}>
+            Open release page
+          </button>
+        </details>
+      )}
+    </div>
   )
 }
 
@@ -845,6 +914,8 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
               </div>
             </div>
           </div>
+
+          <UpdateControl />
 
           {/* Advanced: provider API keys + local LLM connection */}
           <div className="space-y-3">

@@ -122,8 +122,44 @@ class ReasoningSplitter:
         return out
 
 
+class ThinkingRunaway(Exception):
+    """A model reasoned without answering, or repeated itself, past the guard's limits."""
+
+
+class ThinkingGuard:
+    """Aborts runaway thinking: too much reasoning before any answer text, or a repeating tail.
+    Feed every streamed piece; answer text resets the budget."""
+
+    def __init__(self, max_chars: int = 8000):
+        self.max_chars = max_chars
+        self._thinking = ''
+        self._answered = False
+
+    def feed(self, kind: str, text: str) -> None:
+        if kind == 'text':
+            if text.strip():
+                self._answered = True
+            return
+        if self._answered:
+            return
+        self._thinking += text
+        if len(self._thinking) > self.max_chars:
+            raise ThinkingRunaway('reasoning limit reached before an answer')
+        if len(self._thinking) % 400 < len(text) and self._repeats():
+            raise ThinkingRunaway('reasoning is repeating itself')
+
+    def _repeats(self) -> bool:
+        pieces = [p.strip() for p in re.split(r'[.!?\n]+', self._thinking[-1500:]) if len(p.strip()) > 20]
+        last = pieces[-6:]
+        return len(last) == 6 and len(set(last)) <= 2
+
+
 def split_reasoning(text: str) -> tuple[str, str]:
     """(answer, thinking) for a complete reply."""
+    if '</think>' in text and '<think>' not in text:
+        # Some chat templates open the thinking block in the prompt, so only the close is emitted.
+        thinking, _, answer = text.partition('</think>')
+        return answer.lstrip(), thinking
     splitter = ReasoningSplitter()
     pieces = splitter.feed(text) + splitter.flush()
     return (''.join(t for kind, t in pieces if kind == 'text'),

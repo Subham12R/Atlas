@@ -201,9 +201,21 @@ class RunCancelled(StrictModel):
     reason: str | None = Field(default=None, max_length=200)
 
 
+class ReasoningDelta(StrictModel):
+    """The model's visible thinking, shown in a collapsible panel; never the answer."""
+    type: Literal['reasoning.delta']
+    run_id: str | None = None
+    text: str = Field(min_length=1, max_length=8000)
+
+
+def reasoning_events(run_id: str | None, text: str) -> list[dict]:
+    return [{'type': 'reasoning.delta', 'run_id': run_id, 'text': text[i:i + 8000]}
+            for i in range(0, len(text), 8000)]
+
+
 AgentEvent = Annotated[Union[RunStarted, PlanReady, PlanDegraded, ToolStarted,
                              ToolCompleted, ToolFailed, ToolProgress, SourceFound,
-                             AttachmentFound, ApprovalRequired, AssistantDelta,
+                             AttachmentFound, ApprovalRequired, AssistantDelta, ReasoningDelta,
                              RunCompleted, RunFailed, RunCancelled], Field(discriminator='type')]
 AgentEventAdapter = TypeAdapter(AgentEvent)
 

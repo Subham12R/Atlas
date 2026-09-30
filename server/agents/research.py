@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from factory import build_adapter
 from adapters.base import ImageInput, TurnMessage
-from tools.contracts import AgentTurnRequest, ToolContext
+from tools.contracts import AgentTurnRequest, ToolContext, reasoning_events
 from tools.web import FetchInput, fetch_page
 from tools.local_search import AttachmentSearchInput, search_attached_files
 
@@ -322,6 +322,8 @@ async def research_run(request: AgentTurnRequest, adapter, provider: str, model:
     reply = await asyncio.wait_for(adapter.run_turn(messages, []),
                                    timeout=max(0.01, deadline - time.monotonic()))
     _check(cancelled, deadline)
+    for item in reasoning_events(run_id, reply.reasoning):
+        emit(item)
     evidence_ids = set(context.sources) | {a['source_id'] for a in attached}
     answer, invalid = validate_citations(reply.text, evidence_ids)
     has_citation = any(source_id in evidence_ids for source_id in CITATION.findall(answer))

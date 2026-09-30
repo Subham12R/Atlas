@@ -83,6 +83,9 @@ class Brain:
             if DEBUG and first_chunk:
                 print(f"[brain] time to first token: {time.monotonic() - t1:.2f}s")
                 first_chunk = False
+            if isinstance(chunk, dict):  # e.g. {'thinking': ...}: shown, never stored as the reply
+                yield chunk
+                continue
             text_chunks.append(chunk)
             yield chunk
 

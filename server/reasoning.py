@@ -66,10 +66,12 @@ def gemini_thinking(model: str, level: str | None) -> dict | None:
     """ThinkingConfig kwargs; 2.5 Pro cannot disable thinking, so off is its minimum."""
     if not level:
         return None
+    # include_thoughts returns thought summaries so the app can show what the model considered.
     if model.startswith('gemini-2.5-pro'):
-        return {'thinking_budget': _GEMINI_PRO_BUDGET[level]}
+        return {'thinking_budget': _GEMINI_PRO_BUDGET[level], 'include_thoughts': True}
     if model.startswith('gemini-2.5'):
-        return {'thinking_budget': _GEMINI_FLASH_BUDGET[level]}
+        budget = _GEMINI_FLASH_BUDGET[level]
+        return {'thinking_budget': budget, 'include_thoughts': budget > 0}
     if model.startswith('gemini-3'):
-        return {'thinking_level': 'low' if level in ('off', 'low') else 'high'}
+        return {'thinking_level': 'low' if level in ('off', 'low') else 'high', 'include_thoughts': True}
     return None

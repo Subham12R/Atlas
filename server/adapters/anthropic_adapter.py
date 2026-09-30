@@ -105,8 +105,11 @@ class AnthropicAdapter(BaseAdapter):
         self._messages.append({"role": "user", "content": _content(prompt, images)})
         async with self._client.messages.stream(**self._chat_kwargs(),
                                                 messages=self._messages) as stream:
-            async for text in stream.text_stream:
-                yield text
+            async for event in stream:
+                if event.type == 'text':
+                    yield event.text
+                elif event.type == 'thinking':  # Extended thinking, when the slider enables it.
+                    yield {'thinking': event.thinking}
         final_message = await stream.get_final_message()
         final_text = "".join(block.text for block in final_message.content if block.type == "text")
         self._messages.append({"role": "assistant", "content": final_text})

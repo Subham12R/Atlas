@@ -9,7 +9,7 @@ import uuid
 from typing import Callable
 
 from adapters.base import AdapterTurn, ImageInput, TurnMessage
-from tools.contracts import AgentTurnRequest, ToolContext, ToolRunBudget
+from tools.contracts import AgentTurnRequest, ToolContext, ToolRunBudget, reasoning_events
 from tools.registry import default_registry
 from .research import CITATION, agent_timeout_seconds, research_run, validate_citations
 
@@ -72,6 +72,9 @@ async def run_tool_loop(adapter, question: str, context: ToolContext,
             async for event in stream_turn(messages, tools):
                 if event.kind == 'text.delta':
                     text_parts.append(event.text)
+                elif event.kind == 'reasoning.delta' and event.text:
+                    for item in reasoning_events(context.run_id, event.text):
+                        emit(item)
                 elif event.kind == 'tool.call' and event.call is not None:
                     calls.append(event.call)
                 elif event.kind == 'turn.final':
@@ -81,6 +84,8 @@ async def run_tool_loop(adapter, question: str, context: ToolContext,
 
         turn = await asyncio.wait_for(provider_turn(),
                                       timeout=max(0.01, context.deadline - time.monotonic()))
+        for item in reasoning_events(context.run_id, turn.reasoning):
+            emit(item)
         budget.rounds += 1
         if not turn.calls:
             evidence_ids = set(context.sources)
@@ -289,9 +294,24 @@ async def run_selected(body: AgentTurnRequest, session_adapter, provider: str,
                                    timeout=agent_timeout_seconds(provider))
     if cancelled.is_set():
         raise asyncio.CancelledError()
+    for item in reasoning_events(run_id, reply.reasoning):
+        emit(item)
     evidence_ids = set(context.sources)
     answer, invalid = validate_citations(reply.text, evidence_ids)
     has_citation = any(source_id in evidence_ids for source_id in CITATION.findall(answer))
+    if evidence_ids and (invalid or not has_citation):
+        # One bounded repair, as Research does, before reporting missing citations.
+        emit({'type': 'tool.progress', 'run_id': run_id, 'phase': 'Checking citations'})
+        repaired = await asyncio.wait_for(writer.run_turn([*messages, TurnMessage(
+            role='assistant', content=reply.text), TurnMessage(role='user', content=(
+                'Add a source ID in square brackets, e.g. [S1], after each factual claim that the '
+                'sources support; remove IDs that are not in the sources. Keep the wording. Do not '
+                'invent IDs. Return only the corrected answer.'))], []),
+            timeout=agent_timeout_seconds(provider))
+        if cancelled.is_set():
+            raise asyncio.CancelledError()
+        answer, invalid = validate_citations(repaired.text, evidence_ids)
+        has_citation = any(source_id in evidence_ids for source_id in CITATION.findall(answer))
     if invalid or (evidence_ids and not has_citation):
         context.degraded_reason = 'invalid or missing citations'
         emit({'type': 'tool.failed', 'run_id': run_id, 'tool': 'citation_check',

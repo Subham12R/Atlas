@@ -14,7 +14,14 @@ from openai import AsyncOpenAI, BadRequestError
 from reasoning import openai_effort
 
 from .base import (AdapterCapabilities, AdapterEvent, AdapterTurn, BaseAdapter,
-                   ImageInput, Reply, ToolCall, TurnMessage, alternating_turns)
+                   ImageInput, ReasoningSplitter, Reply, ToolCall, TurnMessage,
+                   alternating_turns, split_reasoning)
+
+
+def _reasoning_field(part) -> str:
+    """LM Studio/vLLM send `reasoning_content`; Ollama and OpenRouter send `reasoning`."""
+    value = getattr(part, 'reasoning_content', None) or getattr(part, 'reasoning', None)
+    return value if isinstance(value, str) else ''
 
 DEFAULT_MODEL = "gpt-4o"
 
@@ -100,8 +107,9 @@ class OpenAIAdapter(BaseAdapter):
         calls = tuple(ToolCall(id=c.id, name=c.function.name,
                                arguments=c.function.arguments)
                       for c in (message.tool_calls or []))
-        return AdapterTurn(text=message.content or '', calls=calls,
-                           stop_reason=choice.finish_reason or 'stop')
+        text, inline = split_reasoning(message.content or '')
+        return AdapterTurn(text=text, calls=calls, stop_reason=choice.finish_reason or 'stop',
+                           reasoning=_reasoning_field(message) + inline)
 
     async def stream_turn(self, messages: list[TurnMessage], tools: list[dict]):
         native = self._turn_messages(messages)
@@ -111,12 +119,16 @@ class OpenAIAdapter(BaseAdapter):
         stream = await self._create(**kwargs)
         calls: dict[int, dict] = {}
         stop_reason = 'stop'
+        splitter = ReasoningSplitter()
         async for chunk in stream:
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
-            if choice.delta.content:
-                yield AdapterEvent(kind='text.delta', text=choice.delta.content)
+            thinking = _reasoning_field(choice.delta)
+            if thinking:
+                yield AdapterEvent(kind='reasoning.delta', text=thinking)
+            for kind, text in splitter.feed(choice.delta.content or ''):
+                yield AdapterEvent(kind='reasoning.delta' if kind == 'thinking' else 'text.delta', text=text)
             for part in choice.delta.tool_calls or []:
                 call = calls.setdefault(part.index, {'id': '', 'name': '', 'arguments': ''})
                 if part.id:
@@ -128,6 +140,8 @@ class OpenAIAdapter(BaseAdapter):
                         raise ValueError('tool arguments too large')
             if choice.finish_reason:
                 stop_reason = choice.finish_reason
+        for kind, text in splitter.flush():
+            yield AdapterEvent(kind='reasoning.delta' if kind == 'thinking' else 'text.delta', text=text)
         completed_calls = []
         for index in sorted(calls):
             call = calls[index]
@@ -144,24 +158,41 @@ class OpenAIAdapter(BaseAdapter):
     async def send(self, prompt: str, images: list[ImageInput] | None = None) -> Reply:
         messages = [*self._messages, {"role": "user", "content": _content(prompt, images)}]
         resp = await self._create(model=self.model, messages=messages)
-        text = resp.choices[0].message.content or ""
+        message = resp.choices[0].message
+        text, inline = split_reasoning(message.content or "")
         if not text.strip():
             raise ValueError('model returned no text')
         self._messages = [*messages, {"role": "assistant", "content": text}]
         return Reply(text=text, provider=self.name,
-                     meta={"model": resp.model,
+                     meta={"model": resp.model, "thinking": _reasoning_field(message) + inline,
                            "usage": resp.usage.model_dump() if resp.usage else None})
 
     async def send_stream(self, prompt: str, images: list[ImageInput] | None = None):
         messages = [*self._messages, {"role": "user", "content": _content(prompt, images)}]
         resp = await self._create(model=self.model, messages=messages, stream=True)
         text_chunks = []
+        splitter = ReasoningSplitter()
         async for chunk in resp:
-            content = chunk.choices[0].delta.content or ""
-            if content:
-                text_chunks.append(content)
-                yield content
-        
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            thinking = _reasoning_field(delta)
+            if thinking:
+                yield {'thinking': thinking}
+            for kind, text in splitter.feed(delta.content or ''):
+                if kind == 'thinking':
+                    yield {'thinking': text}
+                else:
+                    text_chunks.append(text)
+                    yield text
+        for kind, text in splitter.flush():
+            if kind == 'thinking':
+                yield {'thinking': text}
+            else:
+                text_chunks.append(text)
+                yield text
+
+        # Thinking is shown to the user but never replayed as the assistant's words.
         full_text = "".join(text_chunks)
         if not full_text.strip():
             raise ValueError('model returned no text')

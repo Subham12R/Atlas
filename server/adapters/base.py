@@ -74,6 +74,8 @@ class AdapterCapabilities:
 class BaseAdapter(ABC):
     name: str = "base"
     capabilities = AdapterCapabilities()
+    # User-selected reasoning level (see reasoning.py); set per request by the API.
+    reasoning: str | None = None
 
     async def run_turn(self, messages: list[TurnMessage], tools: list[dict]) -> AdapterTurn:
         """Provider-native calls when supported; never execute a tool here."""

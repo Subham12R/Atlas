@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from anthropic import AsyncAnthropic
 
+from reasoning import anthropic_thinking
+
 from .base import (AdapterCapabilities, AdapterTurn, BaseAdapter, ImageInput,
                    Reply, ToolCall, TurnMessage)
 
@@ -79,14 +81,21 @@ class AnthropicAdapter(BaseAdapter):
         ]})
         return AdapterTurn(text=text, calls=calls, stop_reason=response.stop_reason or 'stop')
 
+    def _chat_kwargs(self) -> dict:
+        """Chat-only extended thinking. Agent turns skip it: tool-use replays would need
+        the signed thinking blocks, which TurnMessage does not carry."""
+        budget = anthropic_thinking(self.reasoning)
+        if not budget:
+            return {'model': self.model, 'max_tokens': MAX_TOKENS}
+        return {'model': self.model, 'max_tokens': MAX_TOKENS + budget,
+                'thinking': {'type': 'enabled', 'budget_tokens': budget}}
+
     async def init(self) -> None:
         pass
 
     async def send(self, prompt: str, images: list[ImageInput] | None = None) -> Reply:
         self._messages.append({"role": "user", "content": _content(prompt, images)})
-        resp = await self._client.messages.create(
-            model=self.model, max_tokens=MAX_TOKENS, messages=self._messages,
-        )
+        resp = await self._client.messages.create(**self._chat_kwargs(), messages=self._messages)
         text = "".join(block.text for block in resp.content if block.type == "text")
         self._messages.append({"role": "assistant", "content": text})
         return Reply(text=text, provider=self.name,
@@ -94,9 +103,8 @@ class AnthropicAdapter(BaseAdapter):
 
     async def send_stream(self, prompt: str, images: list[ImageInput] | None = None):
         self._messages.append({"role": "user", "content": _content(prompt, images)})
-        async with self._client.messages.stream(
-            model=self.model, max_tokens=MAX_TOKENS, messages=self._messages
-        ) as stream:
+        async with self._client.messages.stream(**self._chat_kwargs(),
+                                                messages=self._messages) as stream:
             async for text in stream.text_stream:
                 yield text
         final_message = await stream.get_final_message()

@@ -12,6 +12,7 @@ import {
   type DocumentHit,
   type IndexedDocument
 } from '@/lib/api'
+import { ContextCard } from '@/components/ai/context-card'
 
 const MAX_BYTES = 1024 * 1024
 
@@ -221,6 +222,18 @@ export default function DocumentLibrary(): React.JSX.Element {
           ))}
         </ul>
       )}
+      <ul className="grid gap-2 sm:grid-cols-2">
+        {results.map((hit) => (
+          <li key={`${hit.source_id}-${hit.chunk_id}`}>
+            <ContextCard
+              label={`${hit.name} · chunk ${hit.chunk_id}`}
+              meta={`ID ${hit.source_id.slice(0, 8)} · score ${hit.score.toFixed(3)}`}
+            >
+              {hit.text}
+            </ContextCard>
+          </li>
+        ))}
+      </ul>
     </section>
   )
 }

@@ -4,6 +4,8 @@ reimplementing a client.
 """
 from __future__ import annotations
 
+from reasoning import openrouter_reasoning
+
 from .openai_adapter import OpenAIAdapter
 from .base import AdapterCapabilities
 
@@ -18,3 +20,8 @@ class OpenRouterAdapter(OpenAIAdapter):
 
     def __init__(self, api_key: str, model: str | None = None, debug: bool = False):
         super().__init__(api_key, model or DEFAULT_MODEL, base_url=BASE_URL, debug=debug)
+
+    def _reasoning_kwargs(self) -> dict:
+        # OpenRouter normalizes one `reasoning` object across the models it routes to.
+        reasoning = openrouter_reasoning(self.reasoning)
+        return {'extra_body': {'reasoning': reasoning}} if reasoning else {}

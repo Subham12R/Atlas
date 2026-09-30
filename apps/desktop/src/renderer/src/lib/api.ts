@@ -25,22 +25,40 @@ export interface SessionInfo {
   thread_id: string | null
 }
 
+export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high' | 'max'
+
 export interface RouteDecision {
   state: 'ready' | 'degraded' | 'no_eligible_model'
   mode: 'research' | 'coding' | 'documentation'
   provider: string | null
   model: string | null
   reason: string
+  /** Auto tool call the server chose for this turn (current web info), if any. */
+  tool?: 'searchWeb' | 'safeTools' | null
+  /** Level to send: exact for a picked model, policy-capped for Auto. */
+  reasoning?: ReasoningLevel | null
+}
+
+export interface RouteOptions {
+  allowCloud?: boolean
+  reasoning?: ReasoningLevel
+  agentMode?: AgentTurnRequest['mode']
 }
 
 export function routeTurn(
   prompt: string,
   mode: ExecutionMode,
   preference?: { provider: string; model: string },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: RouteOptions = {}
 ): Promise<RouteDecision> {
   return request('/routing/turn', {
-    method: 'POST', body: JSON.stringify({ prompt, mode, preference }), signal
+    method: 'POST',
+    body: JSON.stringify({
+      prompt, mode, preference,
+      allow_cloud: options.allowCloud, reasoning: options.reasoning, agent_mode: options.agentMode
+    }),
+    signal
   })
 }
 
@@ -202,13 +220,14 @@ export async function sendMessageStream(
   onToken: (token: string) => void,
   onMemory?: (memory: MemoryRecall) => void,
   signal?: AbortSignal,
-  mode: ExecutionMode = 'auto'
+  mode: ExecutionMode = 'auto',
+  reasoning?: ReasoningLevel
 ): Promise<void> {
   const { url, token } = await getApiConnection()
   const res = await fetch(`${url}/sessions/${sessionId}/messages/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ prompt, images: images?.length ? images : undefined, mode }),
+    body: JSON.stringify({ prompt, images: images?.length ? images : undefined, mode, reasoning }),
     signal
   })
 
@@ -288,6 +307,7 @@ export interface AgentTurnRequest {
   images?: ImagePayload[]
   recent?: { role: 'user' | 'assistant'; content: string }[]
   attachments?: { id: string; name: string; mime: string; content: string }[]
+  reasoning?: ReasoningLevel
 }
 
 export async function sendAgentStream(

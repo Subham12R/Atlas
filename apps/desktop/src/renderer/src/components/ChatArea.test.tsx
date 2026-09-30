@@ -4,6 +4,7 @@ import ChatArea, { type Chat } from './ChatArea'
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  localStorage.clear()
   Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
 })
 
@@ -58,16 +59,27 @@ it('passes the selected mode and existing prompt fields to its parent', async ()
     />
   )
 
-  await waitFor(() => expect(screen.getByText('Local model')).toBeTruthy())
+  await screen.findByRole('button', { name: 'Model: Auto' })
   fireEvent.click(screen.getByRole('button', { name: 'Intent: Auto' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Research web' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Research' }))
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), {
     target: { value: 'Find the facts' }
   })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
   expect(onSendMessage).toHaveBeenCalledWith(
-    'Find the facts', 'deepResearch', 'local', null, [], 'auto', 'research_brief', false
+    'Find the facts', 'deepResearch', 'auto', null, [], 'auto', 'research_brief',
+    { reasoning: 'medium', allowCloud: false, imageProvider: undefined }
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Intent: Research' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Web search' }))
+  fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), {
+    target: { value: 'Quick lookup' }
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+  expect(onSendMessage).toHaveBeenLastCalledWith(
+    'Quick lookup', 'searchWeb', 'auto', null, [], 'auto', 'research_brief',
+    { reasoning: 'medium', allowCloud: false, imageProvider: undefined }
   )
 })
 
@@ -101,10 +113,13 @@ it('filters connected models from the composer and sends the selected local mode
     />
   )
 
-  const model = await screen.findByRole('button', { name: 'Model: gemma4:12b' })
+  const model = await screen.findByRole('button', { name: 'Model: Auto' })
   expect(screen.getByPlaceholderText('Message Atlas...').parentElement?.contains(model)).toBe(true)
   expect(model.closest('header')).toBeNull()
   fireEvent.click(model)
+  fireEvent.click(screen.getByRole('switch', { name: 'Allow cloud models in Auto' }))
+  fireEvent.change(screen.getByRole('slider', { name: /Reasoning/ }), { target: { value: '4' } })
+  expect(localStorage.getItem('atlas.reasoning')).toBe('max')
   fireEvent.change(screen.getByRole('searchbox', { name: 'Filter models' }), {
     target: { value: 'qwen' }
   })
@@ -117,7 +132,8 @@ it('filters connected models from the composer and sends the selected local mode
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Hello' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
   expect(onSendMessage).toHaveBeenCalledWith(
-    'Hello', null, 'local', 'qwen2.5:7b', [], 'auto', 'research_brief', true
+    'Hello', null, 'local', 'qwen2.5:7b', [], 'auto', 'research_brief',
+    { reasoning: 'max', allowCloud: true, imageProvider: undefined }
   )
 })
 
@@ -306,4 +322,47 @@ it('links each issued source in a grouped citation and shows its source card', (
   expect(screen.queryByRole('link', { name: '[S9]' })).toBeNull()
   expect(screen.queryByRole('link', { name: /Unsafe link/ })).toBeNull()
   expect(screen.getByText(/Used 2 sources/)).toBeTruthy()
+})
+
+it('approves only checked plan steps, retries in place, and shows saved trace chips', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', { getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }) })
+  vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>(async (input) =>
+    new Response(JSON.stringify(String(input).endsWith('/settings/providers/local/models')
+      ? { runtime: 'ollama', models: [] } : { local: { configured: true } }),
+    { headers: { 'Content-Type': 'application/json' } })))
+  const onSendMessage = vi.fn()
+  const onComposerChange = vi.fn()
+  const onRetryMessage = vi.fn()
+  const onPlanStatus = vi.fn()
+  const chat: Chat = {
+    id: 'plan', title: 'Plan', isPinned: false, timestamp: '', provider: 'local',
+    sessionId: null, threadId: null,
+    messages: [
+      { id: 'q', sender: 'user', timestamp: '', content: 'Plan the migration' },
+      { id: 'p', sender: 'assistant', timestamp: '', content: '1. Back up\n2. Migrate\n3. Verify', tool: 'thinkLonger',
+        trace: [{ label: 'web search: migration', tool: 'web_search', status: 'done' }],
+        memory: { summary: false, hits: [{ text: 'Earlier note', thread_id: 'old', distance: 0.2 }], facts: [] } }
+    ]
+  }
+  const open = vi.fn()
+  render(<ChatArea isSidebarCollapsed={false} setIsSidebarCollapsed={vi.fn()}
+    activeChat={chat} onSendMessage={onSendMessage} onNewChat={vi.fn()} onComposerChange={onComposerChange}
+    onRetryMessage={onRetryMessage} onPlanStatus={onPlanStatus} openThread={(id) => (id === 'old' ? open : undefined)}
+    onTogglePin={vi.fn()} onMessageRevealed={vi.fn()} onStopSending={vi.fn()} />)
+  expect(screen.getByRole('list', { name: 'Run steps' }).textContent).toContain('web search: migration')
+  fireEvent.click(screen.getByRole('button', { name: /Past conversation/ }))
+  expect(open).toHaveBeenCalled()
+
+  await waitFor(() => expect(screen.getByRole('button', { name: /Local model/ })).toBeTruthy())
+  fireEvent.click(screen.getByRole('button', { name: 'Retry response' }))
+  expect(onRetryMessage).toHaveBeenCalledWith('p')
+
+  fireEvent.click(screen.getByRole('checkbox', { name: '2. Migrate' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Approve & run' }))
+  expect(onPlanStatus).toHaveBeenCalledWith('p', 'approved')
+  expect(onComposerChange).toHaveBeenCalledWith({ intent: 'auto' })
+  const [text, tool, , , attachments] = onSendMessage.mock.lastCall!
+  expect([text, tool]).toEqual(['Approved steps 1, 3. Carry out only these, step by step.', null])
+  expect(attachments).toEqual([expect.objectContaining({ name: 'approved-plan.md', content: '1. Back up\n3. Verify' })])
 })

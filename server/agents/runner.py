@@ -11,7 +11,7 @@ from typing import Callable
 from adapters.base import AdapterTurn, ImageInput, TurnMessage
 from tools.contracts import AgentTurnRequest, ToolContext, ToolRunBudget
 from tools.registry import default_registry
-from .research import CITATION, research_run, validate_citations
+from .research import CITATION, agent_timeout_seconds, research_run, validate_citations
 
 
 DRAFT_FORMATS = {
@@ -187,7 +187,7 @@ async def run_selected(body: AgentTurnRequest, session_adapter, provider: str,
     context = ToolContext(run_id=run_id, allowed_tools=enabled,
                           thread_id=getattr(brain, 'thread_id', None),
                           attachments={entry.id: entry for entry in body.attachments},
-                          deadline=time.monotonic() + 90, cancelled=cancelled)
+                          deadline=time.monotonic() + agent_timeout_seconds(provider), cancelled=cancelled)
     sources = []
     if body.mode == 'tools':
         if body.images:
@@ -273,7 +273,8 @@ async def run_selected(body: AgentTurnRequest, session_adapter, provider: str,
                                   ' Return only the complete Markdown draft. Do not save files.')
     images = [ImageInput(data=image.data, mime=image.mime) for image in body.images or []]
     messages.append(TurnMessage(role='user', content=body.prompt, images=images))
-    reply = await asyncio.wait_for(writer.run_turn(messages, []), timeout=90)
+    reply = await asyncio.wait_for(writer.run_turn(messages, []),
+                                   timeout=agent_timeout_seconds(provider))
     if cancelled.is_set():
         raise asyncio.CancelledError()
     evidence_ids = set(context.sources)

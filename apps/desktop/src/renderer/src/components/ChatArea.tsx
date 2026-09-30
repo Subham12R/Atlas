@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import * as Popover from '@radix-ui/react-popover'
-import { Check, ChevronDown, Cloud, Cpu, Search } from 'lucide-react'
+import { Check, ChevronDown, Cloud, Cpu, Loader2, RotateCcw, Search, Sparkles, X } from 'lucide-react'
 import { HugeiconsIcon } from '@hugeicons/react'
 import {
   SidebarRightIcon,
@@ -13,14 +13,16 @@ import {
 } from '@hugeicons/core-free-icons'
 import { cn } from '@/lib/utils'
 import { highlightCode } from '@/lib/highlight'
+import { planSteps, planWithSteps } from '@/lib/plan-steps'
 import { chatToHtml } from '@/lib/exportHtml'
 import { DocumentDraftReview } from '@/components/DocumentDraftReview'
 import { PromptBox, fileIcon, type Attachment } from '@/components/ui/chatgpt-prompt-input'
 import { LoadingState } from '@/components/LoadingState'
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai/reasoning'
 import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai/task'
-import { Plan, PlanHeader, PlanTitle, PlanTrigger, PlanContent } from '@/components/ai/plan'
+import { Plan, PlanHeader, PlanTitle, PlanTrigger, PlanContent, PlanFooter } from '@/components/ai/plan'
 import { Sources, SourcesTrigger, SourcesContent } from '@/components/ai/sources'
+import { ContextCard } from '@/components/ai/context-card'
 import {
   friendlyErrorMessage,
   getLocalModels,
@@ -29,11 +31,13 @@ import {
   type DraftArtifact,
   type DraftKind,
   type MemoryRecall,
-  type ProviderSettingsMap
+  type ProviderSettingsMap,
+  type ReasoningLevel
 } from '@/lib/api'
 import type { ExecutionMode } from '@/lib/modes'
 import { supportsImageGeneration, type ChatIntent, type ComposerPreference } from '@/lib/chat-intent'
 import ThemeSwitch from '@/components/ui/theme-switch'
+import { Switch } from '@/components/ui/switch'
 
 export interface MessageFileAttachment {
   kind: 'file'
@@ -47,6 +51,37 @@ export interface MessageImageAttachment {
 }
 
 export type MessageAttachment = MessageFileAttachment | MessageImageAttachment
+
+/** One saved step of an agent run (planning or a tool call), kept on the
+ * message so the trace survives after streaming ends and across restarts. */
+export interface TraceStep {
+  label: string
+  tool?: string
+  status: 'running' | 'done' | 'failed'
+  detail?: string
+}
+
+/** Per-send model policy. provider 'auto' in onSendMessage means the router picks. */
+export interface SendOptions {
+  reasoning: ReasoningLevel
+  /** Auto may use connected cloud providers (local models are always tried first). */
+  allowCloud: boolean
+  /** Provider for image generation when the model is Auto. */
+  imageProvider?: string
+}
+
+export interface MessageRequest extends SendOptions {
+  tool: string | null
+  mode: ExecutionMode
+  draftKind: DraftKind
+  provider: string
+  model: string | null
+}
+
+export type PlanStatus = 'approved' | 'revising' | 'dismissed'
+
+/** File name the plan-approval flow attaches the approved plan under. */
+export const APPROVED_PLAN_FILE = 'approved-plan.md'
 
 export interface Message {
   id: string
@@ -75,6 +110,13 @@ export interface Message {
   runStatus?: 'completed' | 'partial'
   attachmentSources?: { source_id: string; filename: string; section: string }[]
   draft?: DraftArtifact
+  trace?: TraceStep[]
+  /** User messages: the exact request, so Retry replays it faithfully. */
+  request?: MessageRequest
+  /** Plan-mode replies: the user's decision on the plan. */
+  planStatus?: PlanStatus
+  /** A retry of this reply failed; the reply shown is the original. */
+  retryError?: string
   /** The tool used to produce this reply (searchWeb/deepResearch/thinkLonger/
    * writeCode), if any -- picks the reply's visual treatment (Task trace,
    * Plan card, or the default plain bubble). */
@@ -90,6 +132,8 @@ export interface Chat {
   provider: string | null
   /** Concrete model bound to the current provider session. */
   model?: string | null
+  /** The user chose Auto; `provider`/`model` are just the last routed pick. */
+  autoModel?: boolean
   sessionId: string | null
   threadId: string | null
   isSending?: boolean
@@ -114,12 +158,17 @@ interface ChatAreaProps {
     attachments: Attachment[],
     mode: ExecutionMode,
     draftKind: DraftKind,
-    preferredModel: boolean
+    options: SendOptions
   ) => void
   onNewChat: () => void
   onTogglePin: (id: string) => void
   onMessageRevealed: (messageId: string) => void
   onStopSending: (chatId: string) => void
+  /** Regenerates this assistant reply in place. */
+  onRetryMessage?: (messageId: string) => void
+  onPlanStatus?: (messageId: string, status: PlanStatus) => void
+  /** Returns an opener when a memory recall's thread maps to another chat. */
+  openThread?: (threadId: string) => (() => void) | undefined
 }
 
 type ModelOption = {
@@ -137,6 +186,19 @@ const MODELS: ModelOption[] = [
   { id: 'openrouter', provider: 'openrouter', name: 'OpenRouter', desc: 'Any model, routed through OpenRouter' },
   { id: 'local', provider: 'local', name: 'Local model', desc: 'Ollama, LM Studio, vLLM, or another local server' }
 ]
+
+/** The router picks provider + model per turn (see server auto_route.py). */
+const AUTO_MODEL: ModelOption = { id: 'auto', provider: 'auto', name: 'Auto', desc: 'Picks a model per message' }
+
+const REASONING_LEVELS: ReasoningLevel[] = ['off', 'low', 'medium', 'high', 'max']
+const REASONING_LABELS: Record<ReasoningLevel, string> = {
+  off: 'Off', low: 'Low', medium: 'Med', high: 'High', max: 'Max'
+}
+
+function storedReasoning(): ReasoningLevel {
+  const value = localStorage.getItem('atlas.reasoning')
+  return REASONING_LEVELS.includes(value as ReasoningLevel) ? (value as ReasoningLevel) : 'medium'
+}
 
 function localModelOption(model: string, runtime: string = 'local'): ModelOption {
   const runtimeName =
@@ -159,21 +221,55 @@ function localModelOption(model: string, runtime: string = 'local'): ModelOption
 /** Collapsible reasoning-trace panel, shown above the reply when a provider
  * supplies one. No adapter populates `thinking` yet -- this stays inert
  * (renders nothing) until reasoning-model streaming is wired up. */
-function MemoryUsed({ memory }: { memory?: MemoryRecall }): React.JSX.Element | null {
+function MemoryUsed({
+  memory,
+  openThread
+}: {
+  memory?: MemoryRecall
+  openThread?: ChatAreaProps['openThread']
+}): React.JSX.Element | null {
   if (!memory || (!memory.summary && memory.hits.length === 0 && memory.facts.length === 0)) return null
   return (
     <details className="mt-3 text-xs text-[#6E6D6A] dark:text-[#9E9D9A]">
       <summary className="cursor-pointer select-none font-medium">Memory used ({memory.hits.length} recall{memory.hits.length === 1 ? '' : 's'})</summary>
-      <div className="mt-2 space-y-2 rounded-lg bg-[#F1EFEA] dark:bg-[#2C2C2A] p-2.5">
-        {memory.summary && <p>Used this conversation&apos;s rolling summary.</p>}
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        {memory.summary && (
+          <ContextCard label="Conversation summary">This conversation&apos;s rolling summary.</ContextCard>
+        )}
         {memory.hits.map((hit, index) => (
-          <p key={`${hit.thread_id}-${index}`} className="line-clamp-3">
-            <span className="font-medium">{Math.round((1 - hit.distance) * 100)}% match:</span> {hit.text}
-          </p>
+          <ContextCard key={`${hit.thread_id}-${index}`} label="Past conversation"
+            meta={`${Math.round((1 - hit.distance) * 100)}% match`} onClick={openThread?.(hit.thread_id)}>
+            {hit.text}
+          </ContextCard>
         ))}
-        {memory.facts.map((fact) => <p key={fact}>{fact}</p>)}
+        {memory.facts.map((fact) => <ContextCard key={fact} label="Saved fact">{fact}</ContextCard>)}
       </div>
     </details>
+  )
+}
+
+/** Saved per-message trace of planning/tool steps, rendered as chips. A step
+ * still marked running after the stream ends was interrupted, so it only
+ * spins while the message is actually streaming. */
+function TraceChips({ trace, isStreaming }: { trace?: TraceStep[]; isStreaming: boolean }): React.JSX.Element | null {
+  if (!trace?.length) return null
+  return (
+    <ul aria-label="Run steps" className="mb-2 flex flex-wrap gap-1.5">
+      {trace.map((step, index) => (
+        <li key={index} title={step.detail}
+          className={cn(
+            'flex max-w-64 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]',
+            step.status === 'failed'
+              ? 'border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300'
+              : 'border-[#E5E3DF] text-[#6E6D6A] dark:border-[#2C2C2A] dark:text-[#9E9D9A]'
+          )}>
+          {step.status === 'failed' ? <X size={11} aria-hidden="true" />
+            : step.status === 'running' && isStreaming ? <Loader2 size={11} className="animate-spin" aria-hidden="true" />
+              : step.status === 'done' ? <Check size={11} aria-hidden="true" /> : null}
+          <span className="truncate">{step.label}</span>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -393,10 +489,14 @@ export default function ChatArea({
   onNewChat,
   onTogglePin,
   onMessageRevealed,
-  onStopSending
+  onStopSending,
+  onRetryMessage,
+  onPlanStatus,
+  openThread
 }: ChatAreaProps): React.JSX.Element {
-  const [selectedModel, setSelectedModel] = useState('openai')
-  const [preferredModel, setPreferredModel] = useState(false)
+  const [selectedModel, setSelectedModel] = useState('auto')
+  const [reasoning, setReasoning] = useState<ReasoningLevel>(storedReasoning)
+  const [allowCloud, setAllowCloud] = useState(() => localStorage.getItem('atlas.autoAllowCloud') === 'true')
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
   const [modelFilter, setModelFilter] = useState('')
   const [isExportingPdf, setIsExportingPdf] = useState(false)
@@ -405,8 +505,11 @@ export default function ChatArea({
   const [providerLoadError, setProviderLoadError] = useState('')
   const [toolModels, setToolModels] = useState<Record<string, string[]>>({})
   const [localModels, setLocalModels] = useState<string[]>([])
+  const [selection, setSelection] = useState<{ text: string; top: number; left: number } | null>(null)
+  const [excludedSteps, setExcludedSteps] = useState<Record<string, number[]>>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const promptRef = useRef<HTMLTextAreaElement>(null)
 
   // Only providers the user has actually connected (an API key, or "local"
   // which never needs one) show up as pickable models -- everything else
@@ -449,7 +552,40 @@ export default function ChatArea({
     if (!el) return
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
     setShowScrollButton(distanceFromBottom > 150)
+    setSelection(null)
   }
+
+  // Selection actions for text selected inside an assistant reply -- by mouse
+  // or keyboard (selectionchange covers both). Escape dismisses the bar.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const update = (): void => {
+      const sel = window.getSelection()
+      const text = sel?.toString().trim() ?? ''
+      const node = sel?.anchorNode
+      const anchor = node instanceof Element ? node : node?.parentElement
+      if (!sel || !text || sel.rangeCount === 0 || !anchor?.closest('[data-reply]')) {
+        setSelection(null)
+        return
+      }
+      const rect = sel.getRangeAt(0).getBoundingClientRect()
+      setSelection({ text: text.slice(0, 2000), top: Math.max(8, rect.top - 40), left: rect.left + rect.width / 2 })
+    }
+    const onSelectionChange = (): void => {
+      clearTimeout(timer)
+      timer = setTimeout(update, 150)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setSelection(null)
+    }
+    document.addEventListener('selectionchange', onSelectionChange)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('selectionchange', onSelectionChange)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [])
 
   const handleExportPdf = async (chat: Chat): Promise<void> => {
     setIsExportingPdf(true)
@@ -469,26 +605,16 @@ export default function ChatArea({
   const currentChatId = activeChat?.id ?? null
   if (currentChatId !== syncedChatId) {
     setSyncedChatId(currentChatId)
-    setPreferredModel(false)
-    if (activeChat?.provider) {
+    if (!activeChat || activeChat.autoModel) {
+      setSelectedModel('auto')
+    } else if (activeChat.provider) {
       setSelectedModel(
         activeChat.provider === 'local' && activeChat.model ? `local:${activeChat.model}` : activeChat.provider
       )
     }
   }
 
-  // A brand-new chat (no provider bound yet) shouldn't default to a provider
-  // the user hasn't actually connected -- once settings load, fall back to
-  // the first active one instead of the hardcoded initial guess.
-  useEffect(() => {
-    if (activeChat?.provider) return
-    if (activeModels.length === 0) return
-    if (activeModels.some((m) => m.id === selectedModel)) return
-    setSelectedModel(activeModels[0].id)
-    setPreferredModel(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeModels, activeChat?.provider])
-
+  // A selection that is no longer connected falls back to Auto in selectedModelObj.
   const effectiveModel = selectedModel
 
   // Scroll to bottom on new messages
@@ -511,7 +637,43 @@ export default function ChatArea({
       attachments,
       mode,
       draftKind,
-      preferredModel || (activeChat?.provider === selectedModelObj.provider && selectedModelObj.provider !== 'local')
+      {
+        reasoning,
+        allowCloud,
+        imageProvider: activeModels.find((m) => supportsImageGeneration(m.provider))?.provider
+      }
+    )
+  }
+
+  const sendFollowUp = (text: string, tool: string | null = null, attachments: Attachment[] = []): void =>
+    handlePromptSubmit(text, tool, attachments, 'auto', composerPreference?.draftKind ?? 'research_brief')
+
+  const [prefill, setPrefill] = useState<{ text: string; id: number } | undefined>()
+
+  /** instruction === null quotes the selection into the composer ("Ask"). */
+  const sendSelectionAction = (instruction: string | null): void => {
+    if (!selection) return
+    const quote = selection.text.split('\n').map((line) => `> ${line}`).join('\n')
+    setSelection(null)
+    window.getSelection()?.removeAllRanges()
+    if (instruction === null) setPrefill({ text: `${quote}\n\n`, id: (prefill?.id ?? 0) + 1 })
+    else sendFollowUp(`${instruction}\n\n${quote}`)
+  }
+
+  const approvePlan = (message: Message, excluded: number[]): void => {
+    onPlanStatus?.(message.id, 'approved')
+    onComposerChange?.({ intent: 'auto' })
+    const kept = planSteps(message.content)
+      .filter((step) => !excluded.includes(step.number))
+      .map((step) => step.number)
+    const content = planWithSteps(message.content, excluded)
+    sendFollowUp(
+      excluded.length
+        ? `Approved steps ${kept.join(', ')}. Carry out only these, step by step.`
+        : 'Approved. Carry out this plan now, step by step.',
+      // Tool-capable models execute with tools; others fall back to plain chat.
+      toolCallsAvailable ? 'safeTools' : null,
+      [{ kind: 'file', id: `plan-${message.id}`, name: APPROVED_PLAN_FILE, content, size: content.length }]
     )
   }
 
@@ -853,9 +1015,18 @@ export default function ChatArea({
   /** The answer text + latency/copy footer, shared between the default
    * assistant bubble and the Plan-mode card (Plan mode only changes the
    * framing around this, not the content itself). */
-  const renderReplyBody = (message: Message, isStreaming: boolean): React.JSX.Element => (
+  const renderReplyBody = (
+    message: Message,
+    isStreaming: boolean,
+    retry?: { onClick?: () => void; blockedReason?: string }
+  ): React.JSX.Element => {
+    const citedSources = message.sources?.filter((source) =>
+      /^https?:\/\//i.test(source.url) && (!source.source_id ||
+        new RegExp(`\\[(?:[SA]\\d+,\\s*)*${source.source_id}(?:,|\\])`).test(message.content))
+    )
+    return (
     <>
-      <div className="selectable-text prose prose-neutral dark:prose-invert max-w-none text-[#2E2E2D] dark:text-[#EAE8E3]">
+      <div data-reply className="selectable-text prose prose-neutral dark:prose-invert max-w-none text-[#2E2E2D] dark:text-[#EAE8E3]">
         <TypewriterText
           text={message.content}
           animate={!!message.isNew}
@@ -871,31 +1042,70 @@ export default function ChatArea({
           ).join(' · ')}
         </div>
       ) : null}
-      <SourcePins sources={message.sources?.filter((source) =>
-        /^https?:\/\//i.test(source.url) && (!source.source_id ||
-          new RegExp(`\\[(?:[SA]\\d+,\\s*)*${source.source_id}(?:,|\\])`).test(message.content))
-      )} />
+      {!isStreaming && citedSources?.length ? (
+        <div className="my-2 flex flex-wrap gap-1.5">
+          {citedSources.map((source, index) => (
+            <a key={source.source_id || index} href={source.url} target="_blank" rel="noreferrer"
+              title={source.title}
+              className="max-w-48 truncate rounded-full border border-[#E5E3DF] px-2 py-0.5 text-[11px] text-[#6E6D6A] hover:bg-[#F1EFEA] hover:text-[#2E2E2D] dark:border-[#2C2C2A] dark:text-[#9E9D9A] dark:hover:bg-[#2C2C2A] dark:hover:text-[#EAE8E3]">
+              {source.source_id ? `${source.source_id} \u00b7 ` : ''}{source.host || source.url.replace(/^https?:\/\//i, '').split('/')[0]}
+            </a>
+          ))}
+        </div>
+      ) : null}
+      <SourcePins sources={citedSources} />
       {message.draft && <DocumentDraftReview draft={message.draft} content={message.content} />}
       {message.runStatus === 'partial' && (
         <p className="text-xs text-amber-700 dark:text-amber-300">Partial research: {message.runPhase || 'some evidence was unavailable'}</p>
       )}
-      <MemoryUsed memory={message.memory} />
+      {message.retryError && (
+        <p role="status" className="text-xs text-amber-700 dark:text-amber-300">
+          Retry failed, showing the original reply: {message.retryError}
+        </p>
+      )}
+      <MemoryUsed memory={message.memory} openThread={openThread} />
       <div className="mt-1.5 flex items-center justify-between">
         <span className="text-[10px] text-[#9E9D9A] dark:text-[#6E6D6A]">
           {typeof message.latencyMs === 'number' ? `${(message.latencyMs / 1000).toFixed(1)}s` : ''}
         </span>
-        <button
-          onClick={() => navigator.clipboard.writeText(message.content)}
-          className="p-1 rounded-md text-[#9E9D9A] dark:text-[#6E6D6A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3] hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] transition-colors cursor-pointer"
-          title="Copy response"
-        >
-          <HugeiconsIcon icon={Copy01Icon} size={13} />
-        </button>
+        {!isStreaming && (
+          <div className="flex items-center gap-0.5">
+            {retry && (
+              <button
+                onClick={retry.onClick}
+                // aria-disabled (not disabled) so the explanatory tooltip still shows.
+                aria-disabled={!retry.onClick}
+                className={cn(
+                  'p-1 rounded-md text-[#9E9D9A] dark:text-[#6E6D6A] transition-colors',
+                  retry.onClick
+                    ? 'hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3] hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] cursor-pointer'
+                    : 'cursor-not-allowed opacity-40'
+                )}
+                title={retry.blockedReason || 'Retry'}
+                aria-label="Retry response"
+              >
+                <RotateCcw size={13} aria-hidden="true" />
+              </button>
+            )}
+            <button
+              onClick={() => navigator.clipboard.writeText(message.content)}
+              className="p-1 rounded-md text-[#9E9D9A] dark:text-[#6E6D6A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3] hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] transition-colors cursor-pointer"
+              title="Copy response"
+              aria-label="Copy response"
+            >
+              <HugeiconsIcon icon={Copy01Icon} size={13} />
+            </button>
+          </div>
+        )}
       </div>
     </>
-  )
+    )
+  }
 
-  const selectedModelObj = activeModels.find((m) => m.id === effectiveModel) || activeModels[0] || MODELS[0]
+  const selectedModelObj = effectiveModel === 'auto'
+    ? AUTO_MODEL
+    : activeModels.find((m) => m.id === effectiveModel) || AUTO_MODEL
+  const isAuto = selectedModelObj.id === 'auto'
   const visibleModels = activeModels.filter((model) =>
     `${model.name} ${model.desc}`.toLowerCase().includes(modelFilter.trim().toLowerCase())
   )
@@ -914,7 +1124,7 @@ export default function ChatArea({
           title="Switch model for the next message"
           className="flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-full border border-[#E5E3DF] px-2.5 text-xs font-medium text-[#2E2E2D] hover:bg-[#F1EFEA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:border-[#4d4d4d] dark:text-[#EAE8E3] dark:hover:bg-[#2C2C2A]"
         >
-          {activeModels.length > 0 && (selectedModelObj.provider === 'local' ? <Cpu size={14} aria-hidden="true" /> : <Cloud size={14} aria-hidden="true" />)}
+          {activeModels.length > 0 && (isAuto ? <Sparkles size={14} aria-hidden="true" /> : selectedModelObj.provider === 'local' ? <Cpu size={14} aria-hidden="true" /> : <Cloud size={14} aria-hidden="true" />)}
           <span className="truncate">{activeModels.length ? selectedModelObj.name : 'Choose model'}</span>
           <ChevronDown size={12} aria-hidden="true" />
         </button>
@@ -928,6 +1138,36 @@ export default function ChatArea({
           className="z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-[#E5E3DF] bg-[#FAF9F6] p-2 text-[#2E2E2D] shadow-md outline-none dark:border-[#2C2C2A] dark:bg-[#252523] dark:text-[#EAE8E3] motion-safe:animate-in motion-safe:fade-in"
         >
           <p className="px-2 pb-2 text-xs font-medium text-[#6E6D6A] dark:text-[#9E9D9A]">Model</p>
+          <button
+            type="button"
+            aria-label="Auto"
+            aria-pressed={isAuto}
+            disabled={activeModels.length === 0}
+            onClick={() => setSelectedModel('auto')}
+            className="mb-1 flex w-full items-center gap-2 rounded-lg p-2 text-left text-sm hover:bg-[#F1EFEA] focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50 dark:hover:bg-[#2C2C2A]"
+          >
+            <Sparkles size={16} aria-hidden="true" />
+            <span className="min-w-0 flex-1">
+              <span className="block">Auto</span>
+              <span className="block text-[11px] text-[#6E6D6A] dark:text-[#9E9D9A]">
+                {allowCloud ? 'Local first, then connected cloud models' : 'Local models only'}
+              </span>
+            </span>
+            {isAuto && <Check size={14} aria-hidden="true" />}
+          </button>
+          {isAuto && (
+            <label className="mb-2 flex items-center justify-between gap-2 rounded-lg px-2 py-1 text-xs">
+              <span>Allow cloud models in Auto</span>
+              <Switch
+                aria-label="Allow cloud models in Auto"
+                checked={allowCloud}
+                onCheckedChange={(checked) => {
+                  setAllowCloud(checked)
+                  localStorage.setItem('atlas.autoAllowCloud', String(checked))
+                }}
+              />
+            </label>
+          )}
           <div className="flex items-center gap-2 rounded-lg border border-[#E5E3DF] px-2 dark:border-[#4d4d4d]">
             <Search size={15} className="shrink-0 text-[#6E6D6A]" aria-hidden="true" />
             <input
@@ -948,7 +1188,6 @@ export default function ChatArea({
                 aria-pressed={selectedModel === model.id}
                 onClick={() => {
                   setSelectedModel(model.id)
-                  setPreferredModel(true)
                   setIsModelDropdownOpen(false)
                   setModelFilter('')
                 }}
@@ -964,6 +1203,35 @@ export default function ChatArea({
               </p>
             )}
           </div>
+          <div className="mt-2 border-t border-[#E5E3DF] px-2 pt-2 dark:border-[#4d4d4d]">
+            <label htmlFor="reasoning-level" className="flex justify-between text-xs font-medium">
+              <span>{isAuto ? 'Reasoning limit' : 'Reasoning'}</span>
+              <span className="text-[#6E6D6A] dark:text-[#9E9D9A]">{REASONING_LABELS[reasoning]}</span>
+            </label>
+            <input
+              id="reasoning-level"
+              type="range"
+              min={0}
+              max={REASONING_LEVELS.length - 1}
+              step={1}
+              value={REASONING_LEVELS.indexOf(reasoning)}
+              aria-valuetext={REASONING_LABELS[reasoning]}
+              onChange={(event) => {
+                const level = REASONING_LEVELS[Number(event.target.value)]
+                setReasoning(level)
+                localStorage.setItem('atlas.reasoning', level)
+              }}
+              className="mt-1 w-full accent-[#2E2E2D] dark:accent-[#EAE8E3]"
+            />
+            <div aria-hidden="true" className="flex justify-between text-[10px] text-[#6E6D6A] dark:text-[#9E9D9A]">
+              {REASONING_LEVELS.map((level) => <span key={level}>{REASONING_LABELS[level]}</span>)}
+            </div>
+            {isAuto && (
+              <p className="mt-1 text-[10px] text-[#6E6D6A] dark:text-[#9E9D9A]">
+                Auto picks less for simple messages and never goes above this.
+              </p>
+            )}
+          </div>
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -971,9 +1239,15 @@ export default function ChatArea({
   const providerDefaults: Record<string, string> = {
     openai: 'gpt-4o', anthropic: 'claude-sonnet-4-5', gemini: 'gemini-2.5-flash'
   }
-  const toolCallsAvailable = (toolModels[selectedModelObj.provider] || []).includes(
-    selectedModelObj.model || providerDefaults[selectedModelObj.provider] || ''
-  )
+  const supportsTools = (option: ModelOption): boolean =>
+    (toolModels[option.provider] || []).includes(option.model || providerDefaults[option.provider] || '')
+  // Auto can only reach a tool-capable model when cloud is allowed (local has no verified tool contract).
+  const toolCallsAvailable = isAuto
+    ? allowCloud && activeModels.some(supportsTools)
+    : supportsTools(selectedModelObj)
+  const imageGenerationAvailable = isAuto
+    ? activeModels.some((m) => supportsImageGeneration(m.provider))
+    : supportsImageGeneration(selectedModelObj.provider)
 
   return (
     <main className="flex-1 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#171717] relative overflow-hidden">
@@ -1076,7 +1350,7 @@ export default function ChatArea({
                   modelPicker={modelPicker}
                   canSend={activeModels.length > 0}
                   toolCallsAvailable={toolCallsAvailable}
-                  imageGenerationAvailable={supportsImageGeneration(selectedModelObj.provider)}
+                  imageGenerationAvailable={imageGenerationAvailable}
                   intent={composerPreference?.intent}
                   draftKind={composerPreference?.draftKind}
                   onIntentChange={(intent: ChatIntent) => onComposerChange?.({ intent })}
@@ -1127,11 +1401,25 @@ export default function ChatArea({
 
                 return (
                   <>
-                    {activeChat.messages.map((message) => {
+                    {activeChat.messages.map((message, messageIndex) => {
                       const isStreamingMessage =
                         !!activeChat.isSending &&
                         message.sender === 'assistant' &&
                         message.id === lastMessage?.id
+                      const isSettledLast = !activeChat.isSending && message.id === lastMessage?.id
+                      const prompt = activeChat.messages[messageIndex - 1]
+                      const retry = isSettledLast && message.sender === 'assistant' && prompt?.sender === 'user'
+                        ? prompt.attachments?.length
+                          // Attachment contents aren't stored with the chat, so this
+                          // turn can't be replayed faithfully.
+                          ? { blockedReason: "Can't retry: attachments aren't stored with the chat" }
+                          : { onClick: onRetryMessage && (() => onRetryMessage(message.id)) }
+                        : undefined
+                      const runsApprovedPlan = prompt?.attachments?.some(
+                        (att) => att.kind === 'file' && att.name === APPROVED_PLAN_FILE
+                      )
+                      const steps = message.tool === 'thinkLonger' ? planSteps(message.content) : []
+                      const excluded = excludedSteps[message.id] || []
 
                       // The empty placeholder pushed before any tokens arrive would
                       // otherwise render as its own near-empty bubble alongside the
@@ -1173,15 +1461,71 @@ export default function ChatArea({
                             ) : message.tool === 'thinkLonger' ? (
                               <>
                                 <AttachmentBlocks attachments={message.attachments} />
+                                <TraceChips trace={message.trace} isStreaming={isStreamingMessage} />
                                 <ThinkingBlock thinking={message.thinking} />
-                                <Plan defaultOpen>
+                                <Plan key={message.planStatus === 'dismissed' ? 'closed' : 'open'}
+                                  defaultOpen={message.planStatus !== 'dismissed'} isStreaming={isStreamingMessage}>
                                   <PlanHeader>
-                                    <PlanTitle>Plan mode</PlanTitle>
+                                    <PlanTitle>{message.planStatus ? `Plan \u00b7 ${message.planStatus}` : 'Plan mode'}</PlanTitle>
                                     <PlanTrigger />
                                   </PlanHeader>
                                   <PlanContent>
-                                    {renderReplyBody(message, isStreamingMessage)}
+                                    {renderReplyBody(message, isStreamingMessage, retry)}
                                   </PlanContent>
+                                  {isSettledLast && !message.planStatus && message.content &&
+                                    !message.content.startsWith('**Error:**') && (
+                                    <PlanFooter className="flex-col items-stretch gap-3">
+                                      {steps.length > 1 && (
+                                        <fieldset className="space-y-1">
+                                          <legend className="mb-1 text-xs font-medium">Steps to run</legend>
+                                          {steps.map((step) => (
+                                            <label key={step.number} className="flex items-start gap-2 text-xs">
+                                              <input type="checkbox" className="mt-0.5"
+                                                checked={!excluded.includes(step.number)}
+                                                onChange={(event) => setExcludedSteps((prev) => ({
+                                                  ...prev,
+                                                  [message.id]: event.target.checked
+                                                    ? excluded.filter((n) => n !== step.number)
+                                                    : [...excluded, step.number]
+                                                }))} />
+                                              <span className="line-clamp-2">{step.number}. {step.text}</span>
+                                            </label>
+                                          ))}
+                                        </fieldset>
+                                      )}
+                                      <div className="flex flex-wrap gap-2">
+                                        <button
+                                          type="button"
+                                          disabled={steps.length > 0 && excluded.length >= steps.length}
+                                          onClick={() => approvePlan(message, excluded)}
+                                          className="rounded-lg bg-[#2E2E2D] px-3 py-1.5 text-xs font-medium text-[#FAF9F6] hover:bg-[#1A1A19] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-40 dark:bg-[#EAE8E3] dark:text-[#171717] dark:hover:bg-white cursor-pointer"
+                                        >
+                                          Approve &amp; run
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            onPlanStatus?.(message.id, 'revising')
+                                            onComposerChange?.({ intent: 'plan' })
+                                            promptRef.current?.focus()
+                                          }}
+                                          className="rounded-lg border border-[#E5E3DF] px-3 py-1.5 text-xs font-medium hover:bg-[#F1EFEA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:border-[#2C2C2A] dark:hover:bg-[#2C2C2A] cursor-pointer"
+                                        >
+                                          Revise plan
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            onPlanStatus?.(message.id, 'dismissed')
+                                            onComposerChange?.({ intent: 'auto' })
+                                          }}
+                                          className="rounded-lg px-3 py-1.5 text-xs font-medium text-[#6E6D6A] hover:bg-[#F1EFEA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:text-[#9E9D9A] dark:hover:bg-[#2C2C2A] cursor-pointer"
+                                        >
+                                          Dismiss
+                                        </button>
+                                      </div>
+                                    </PlanFooter>
+                                  )}
                                 </Plan>
                               </>
                             ) : (
@@ -1190,10 +1534,18 @@ export default function ChatArea({
                                 {message.routeReason && (
                                   <p className="mb-2 text-xs text-muted-foreground">Auto route: {message.routeReason}</p>
                                 )}
+                                {runsApprovedPlan && (
+                                  <p className="mb-2 text-xs text-muted-foreground">
+                                    {message.tool === 'safeTools'
+                                      ? 'Running plan with tools'
+                                      : "Running plan as chat (model can't use tools)"}
+                                  </p>
+                                )}
                                 <SearchTrace tool={message.tool} sources={message.sources}
                                   queries={message.queries} researchPlan={message.researchPlan} />
+                                <TraceChips trace={message.trace} isStreaming={isStreamingMessage} />
                                 <ThinkingBlock thinking={message.thinking} />
-                                {renderReplyBody(message, isStreamingMessage)}
+                                {renderReplyBody(message, isStreamingMessage, retry)}
                               </>
                             )}
                           </div>
@@ -1239,6 +1591,25 @@ export default function ChatArea({
         </div>
       </div>
 
+      {selection && (
+        <div role="toolbar" aria-label="Selection actions"
+          style={{ top: selection.top, left: selection.left }}
+          className="fixed z-30 flex -translate-x-1/2 gap-0.5 rounded-lg border border-[#E5E3DF] bg-[#FAF9F6] p-0.5 shadow-md dark:border-[#2C2C2A] dark:bg-[#252523]">
+          {([
+            ['Explain', 'Explain this part of your reply in simpler terms:'],
+            ['Shorten', 'Rewrite this part of your reply more concisely:'],
+            ['Ask', null]
+          ] as const).map(([label, instruction]) => (
+            <button key={label} type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => sendSelectionAction(instruction)}
+              className="rounded-md px-2.5 py-1 text-xs font-medium text-[#2E2E2D] hover:bg-[#F1EFEA] focus-visible:outline-2 focus-visible:outline-ring dark:text-[#EAE8E3] dark:hover:bg-[#2C2C2A] cursor-pointer">
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {activeChat && activeChat.messages.length > 0 && showScrollButton && (
         <button
           onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
@@ -1254,12 +1625,14 @@ export default function ChatArea({
         <div className="shrink-0 z-10 pt-4 pb-6 px-4 md:px-8">
           <div className="max-w-3xl mx-auto">
             <PromptBox
+              ref={promptRef}
+              prefill={prefill}
               onSubmitPrompt={handlePromptSubmit}
               modelPicker={modelPicker}
               canSend={activeModels.length > 0}
               isBusy={activeChat.isSending}
               toolCallsAvailable={toolCallsAvailable}
-              imageGenerationAvailable={supportsImageGeneration(selectedModelObj.provider)}
+              imageGenerationAvailable={imageGenerationAvailable}
               intent={composerPreference?.intent}
               draftKind={composerPreference?.draftKind}
               onIntentChange={(intent: ChatIntent) => onComposerChange?.({ intent })}

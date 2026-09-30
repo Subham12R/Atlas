@@ -275,9 +275,9 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
           <>
             <h1
               data-gsap-line
-              className="w-full font-sans text-[clamp(5rem,17vw,15rem)] font-medium tracking-[-0.08em] leading-none"
+              className="w-full font-sans text-[clamp(6rem,16vw,14rem)] font-medium tracking-[-0.08em] leading-none"
             >
-              <GradientWaveText paused={reduceMotion} ariaLabel="Atlas" className="min-h-[1.2em]">
+              <GradientWaveText paused={reduceMotion} ariaLabel="Atlas" className="min-h-[1em]">
                 Atlas
               </GradientWaveText>
             </h1>

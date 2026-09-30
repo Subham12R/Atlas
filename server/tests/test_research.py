@@ -136,6 +136,8 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             ResearchSource(source_id='S1', title='x', url='https://example.org/',
                           host='example.org', snippet='x', query_id=1, fetched=True, text='raw')
         self.assertEqual(validate_citations('Claim [S9].', {'S1'}), ('Claim .', ['S9']))
+        self.assertEqual(validate_citations('Claim [S1, S3, S9].', {'S1', 'S3'}),
+                         ('Claim [S1] [S3] .', ['S9']))
 
 
 if __name__ == '__main__':

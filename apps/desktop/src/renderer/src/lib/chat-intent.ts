@@ -3,6 +3,10 @@ import type { DraftKind } from '@/lib/api'
 
 export type ComposerPreference = { intent: ChatIntent; draftKind: DraftKind }
 
+// Mirrors the server image endpoint allowlist; the server remains authoritative.
+export const supportsImageGeneration = (provider: string): boolean =>
+  provider === 'openai' || provider === 'gemini'
+
 export type ChatIntent =
   | 'auto' | 'coding' | 'documentation' | 'searchWeb' | 'deepResearch'
   | 'plan' | 'draftDocument' | 'safeTools' | 'generateImage'

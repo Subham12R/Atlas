@@ -33,7 +33,7 @@ export default function TitleBar({
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       <div
-        className="flex items-center gap-2"
+        className="flex items-center"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         {controls.map(({ label, color, symbol, action }) => (
@@ -43,7 +43,7 @@ export default function TitleBar({
             onClick={action}
             aria-label={label}
             title={label}
-            className="group grid size-7 place-items-center rounded-md focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-current"
+            className="group grid size-7 -mr-2 last:mr-0 place-items-center rounded-md hover:relative hover:z-10 focus-visible:relative focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-current"
           >
             <span
               aria-hidden="true"

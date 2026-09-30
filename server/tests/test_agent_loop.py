@@ -148,6 +148,26 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         with patch('agents.runner.default_registry', return_value=registry), self.assertRaisesRegex(ValueError, 'budget'):
             await run_tool_loop(adapter, 'question', self.context(), lambda event: None)
 
+    async def test_search_mode_asks_for_subject_instead_of_searching_a_pronoun(self):
+        from tools.contracts import AgentTurnRequest
+        class Writer:
+            async def run_turn(self, *args): raise AssertionError('No evidence was found')
+        events = []
+        with patch('agents.runner.default_registry') as registry:
+            await run_selected(AgentTurnRequest(prompt='get me his portfolio and details',
+                                                mode='search_web'), Writer(), 'fake', None,
+                               events.append, asyncio.Event())
+            registry.assert_not_called()
+        self.assertIn('name', next(e['text'] for e in events if e['type'] == 'assistant.delta'))
+        self.assertEqual(next(e['status'] for e in events if e['type'] == 'run.completed'), 'partial')
+        events.clear()
+        with patch('agents.runner.default_registry') as registry:
+            await run_selected(AgentTurnRequest(prompt='get me that portfolio', mode='search_web',
+                                                recent=[{'role': 'user', 'content': 'PRIVATE-DO-NOT-SEARCH'}]),
+                               Writer(), 'fake', None, events.append, asyncio.Event())
+            registry.assert_not_called()
+        self.assertNotIn('PRIVATE-DO-NOT-SEARCH', str(events))
+
     async def test_search_mode_keeps_issued_citations_and_metadata(self):
         from adapters.base import AdapterTurn
         from tools.contracts import AgentTurnRequest

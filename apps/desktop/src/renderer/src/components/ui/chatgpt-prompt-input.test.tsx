@@ -25,6 +25,25 @@ it('safe tools is unavailable for models without native tool calls', () => {
   expect(screen.getByRole('button', { name: 'Safe tools' }).hasAttribute('disabled')).toBe(true)
 })
 
+it('blocks image generation for providers without an image API', () => {
+  const onSubmitPrompt = vi.fn()
+  render(<PromptBox onSubmitPrompt={onSubmitPrompt} imageGenerationAvailable={false} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Intent: Auto' }))
+  expect(screen.getAllByRole('button', { name: 'Generate image' }).every((button) => button.hasAttribute('disabled'))).toBe(true)
+  fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'An image' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+  expect(onSubmitPrompt).toHaveBeenCalledWith('An image', null, [], 'auto', 'research_brief')
+})
+
+it('lets the user stop a running reply without discarding the next queued prompt', () => {
+  const onStop = vi.fn()
+  render(<PromptBox isBusy onStop={onStop} onSubmitPrompt={vi.fn()} />)
+  expect(screen.getByRole('button', { name: 'Stop response' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Stop response' }))
+  expect(onStop).toHaveBeenCalledOnce()
+  expect(screen.getByRole('button', { name: 'Queue message' })).toBeTruthy()
+})
+
 it('queues a message with the selected intent', () => {
   const onSubmitPrompt = vi.fn()
   render(<PromptBox isBusy onSubmitPrompt={onSubmitPrompt} />)

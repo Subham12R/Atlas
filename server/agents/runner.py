@@ -78,7 +78,7 @@ async def run_tool_loop(adapter, question: str, context: ToolContext,
         if not turn.calls:
             evidence_ids = set(context.sources)
             answer, invalid = validate_citations(turn.text, evidence_ids)
-            has_citation = any(source_id in evidence_ids for source_id in CITATION.findall(turn.text))
+            has_citation = any(source_id in evidence_ids for source_id in CITATION.findall(answer))
             if invalid or (evidence_ids and not has_citation):
                 context.degraded_reason = 'invalid or missing citations'
                 emit({'type': 'tool.failed', 'run_id': context.run_id,
@@ -152,6 +152,17 @@ async def run_selected(body: AgentTurnRequest, session_adapter, provider: str,
     writer = brain.adapter if brain is not None else session_adapter
     if cancelled.is_set():
         raise asyncio.CancelledError()
+    # ponytail: conservative pronoun guard; resolve only explicitly public context if follow-ups need automation.
+    if body.mode in {'search_web', 'research'} and re.search(r'\b(his|her|their|its|that (?:portfolio|person|paper|article|source|site))\b', body.prompt, re.I):
+        answer = 'Whose information should I search for? Please include the person or organization name.'
+        emit({'type': 'run.started', 'run_id': run_id, 'mode': body.mode})
+        if brain is not None:
+            _, recall = brain.prepare_agent_turn(body.prompt)
+            await brain.finish_agent_turn(body.prompt, answer, recall, {'source_ids': []})
+        emit({'type': 'assistant.delta', 'run_id': run_id, 'text': answer})
+        emit({'type': 'run.completed', 'run_id': run_id, 'status': 'partial',
+              'reason': 'query needs a subject', 'sources': [], 'attachments': []})
+        return
     if body.mode == 'research':
         result = await research_run(body, writer, provider, model, emit, cancelled, brain)
         emit({'type': 'assistant.delta', 'run_id': result.run_id, 'text': result.answer})
@@ -267,7 +278,7 @@ async def run_selected(body: AgentTurnRequest, session_adapter, provider: str,
         raise asyncio.CancelledError()
     evidence_ids = set(context.sources)
     answer, invalid = validate_citations(reply.text, evidence_ids)
-    has_citation = any(source_id in evidence_ids for source_id in CITATION.findall(reply.text))
+    has_citation = any(source_id in evidence_ids for source_id in CITATION.findall(answer))
     if invalid or (evidence_ids and not has_citation):
         context.degraded_reason = 'invalid or missing citations'
         emit({'type': 'tool.failed', 'run_id': run_id, 'tool': 'citation_check',

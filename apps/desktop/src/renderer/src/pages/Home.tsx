@@ -639,9 +639,21 @@ function Home(): React.JSX.Element {
         )
       }
 
+      const handleThinking = (text: string): void => {
+        setChats((prev) => prev.map((chat) => chat.id !== targetChatId ? chat : {
+          ...chat,
+          messages: chat.messages.map((m) =>
+            m.id === assistantMsgId ? { ...m, thinking: (m.thinking || '') + text } : m)
+        }))
+      }
+
       const handleAgentEvent = (event: AgentEvent): void => {
         if (event.type === 'assistant.delta') {
           handleStreamToken(event.text)
+          return
+        }
+        if (event.type === 'reasoning.delta') {
+          handleThinking(event.text)
           return
         }
         setChats((prev) =>
@@ -735,7 +747,7 @@ function Home(): React.JSX.Element {
               .map((att) => ({ id: att.id, name: att.name, mime: 'text/plain', content: att.content }))
           }, handleAgentEvent, controller.signal)
         : sendMessageStream(sessionId as string, promptToSend, imagePayloads, handleStreamToken,
-            handleMemoryRecall, controller.signal, turnMode, reasoning, transcript)
+            handleMemoryRecall, controller.signal, turnMode, reasoning, transcript, handleThinking)
 
       try {
         await runTurn()
@@ -749,7 +761,7 @@ function Home(): React.JSX.Element {
         setChats((prev) => prev.map((chat) => chat.id === targetChatId
           ? {
               ...chat, sessionId, threadId,
-              messages: chat.messages.map((m) => (m.id === assistantMsgId ? { ...m, content: '' } : m))
+              messages: chat.messages.map((m) => (m.id === assistantMsgId ? { ...m, content: '', thinking: undefined } : m))
             }
           : chat))
         await runTurn()

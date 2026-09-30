@@ -230,7 +230,9 @@ export async function sendMessageStream(
   mode: ExecutionMode = 'auto',
   reasoning?: ReasoningLevel,
   /** The chat's prior turns; the server rebuilds the conversation from them each turn. */
-  history?: HistoryTurn[]
+  history?: HistoryTurn[],
+  /** The model's thinking, streamed separately from the answer. */
+  onThinking?: (text: string) => void
 ): Promise<void> {
   const { url, token } = await getApiConnection()
   const res = await fetch(`${url}/sessions/${sessionId}/messages/stream`, {
@@ -273,7 +275,7 @@ export async function sendMessageStream(
         if (!trimmed.startsWith('data: ')) continue
 
         const dataStr = trimmed.slice(6)
-        let parsed: { text?: string; error?: string; memory?: MemoryRecall }
+        let parsed: { text?: string; thinking?: string; error?: string; memory?: MemoryRecall }
         try {
           parsed = JSON.parse(dataStr)
         } catch (e) {
@@ -286,6 +288,9 @@ export async function sendMessageStream(
         // reply with no indication anything went wrong.
         if (parsed.error) {
           throw new ApiError(502, parsed.error)
+        }
+        if (parsed.thinking) {
+          onThinking?.(parsed.thinking)
         }
         if (parsed.text) {
           onToken(parsed.text)

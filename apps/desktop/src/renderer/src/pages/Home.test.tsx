@@ -444,3 +444,37 @@ it('treats "continue" after a failed search as a retry of that search, not a sea
   // The latency label appears only after the turn fully settles (no effects after teardown).
   await screen.findByText(/^\d+\.\ds$/)
 })
+
+it('shows model thinking in an expandable panel, separate from the answer', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', {
+    getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }),
+    getChats: async () => [], getProfile: async () => ({ name: '', avatarDataUrl: null }),
+    setChats: async () => {}
+  })
+  vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>(async (input) => {
+    const path = new URL(String(input)).pathname
+    if (path.endsWith('/messages/stream')) {
+      return new Response('data: {"thinking":"Let me multiply 17 by 23."}\n\ndata: {"text":"391"}\n\n')
+    }
+    return new Response(JSON.stringify(path === '/settings/providers'
+      ? { local: { configured: true, runtime: 'ollama' } }
+      : path === '/settings/providers/local/models'
+        ? { runtime: 'ollama', models: ['installed:7b'] }
+        : path === '/routing/turn'
+          ? { state: 'ready', mode: 'documentation', provider: 'local', model: 'installed:7b', reason: 'fixture' }
+          : { session_id: 'session-1', provider: 'local', thread_id: null }),
+    { headers: { 'Content-Type': 'application/json' } })
+  }))
+  render(<Home />)
+  await screen.findByRole('button', { name: 'Model: Auto' })
+  fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'What is 17*23?' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+  await screen.findByText('391')
+  await screen.findByText(/^\d+\.\ds$/)
+  const trigger = await screen.findByRole('button', { name: /Thought for/ })
+  await waitFor(() => expect(screen.queryByText('Let me multiply 17 by 23.')).toBeNull())
+  fireEvent.click(trigger)
+  expect(await screen.findByText('Let me multiply 17 by 23.')).toBeTruthy()
+  expect(screen.getByText('391').textContent).toBe('391')
+})

@@ -576,7 +576,7 @@ The historical [multi-mode design](docs/superpowers/specs/2026-09-29-atlas-multi
 
 A `v*` tag matching `apps/desktop/package.json` triggers [the macOS ARM64 workflow](.github/workflows/release-macos.yml): offline tests, typecheck, embedded-server build/smoke test, ad-hoc app-signature check, DMG integrity check, and a matching `.sha256` file. See [installation and verification instructions](apps/desktop/RELEASE.md). The checksum detects changed bytes; it is **not** a publisher signature. The app is not Developer ID signed or notarized, so macOS may require Finder’s Control-click → Open flow. The workflow publishes only if its gates pass; a local build or local tag alone does not publish a release.
 
-The tagged `v1.0.2` build predates the in-progress fix for explicitly selected cloud models in Auto. Do not assume a local working-tree change is present in a downloaded DMG; use a later verified tag/build for that behavior.
+The `v1.0.2` build predates the fix for explicitly selected cloud models in Auto; `v1.0.3` includes it. A downloaded DMG contains only the source at its release tag, not later working-tree changes.
 
 ## Roadmap vs current build
 

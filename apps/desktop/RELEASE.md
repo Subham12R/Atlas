@@ -1,6 +1,12 @@
-## Atlas 1.0.2
+## Atlas 1.0.3
 
-Adds local-first Auto routing for text chat, guarded agent workflows, selected-document retrieval, and explicit model/tool failure states. Auto does not silently route to cloud models. Cloud billing and managed inference are not part of this release.
+- Auto text chat can use a configured cloud model **when you explicitly select it**; otherwise Auto stays local-only.
+- One intent selector replaces the separate mode and tool controls in the composer.
+- Agent runs that fail now say why (unsupported model, missing search key, timeout, or tool limit) instead of a generic error.
+- Grouped citations such as `[S1, S3]` are validated against the sources actually issued and link correctly in chat and export; exports render all heading levels. Search and Research ask who "his/her/their" refers to instead of searching a bare pronoun.
+- Refreshed onboarding: the "Atlas" wordmark is no longer cropped, and account setup uses a WebGL flowing-gradient background (a still frame when reduced motion is on, a static gradient if WebGL is unavailable).
+
+Cloud billing and Atlas-managed inference are not available.
 
 ## Release pipeline
 

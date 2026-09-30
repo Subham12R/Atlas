@@ -23,6 +23,7 @@ import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai/task'
 import { Plan, PlanHeader, PlanTitle, PlanTrigger, PlanContent, PlanFooter } from '@/components/ai/plan'
 import { Sources, SourcesTrigger, SourcesContent } from '@/components/ai/sources'
 import { ContextCard } from '@/components/ai/context-card'
+import { GradientWaveText } from '@/components/gradient-wave-text'
 import {
   friendlyErrorMessage,
   getLocalModels,
@@ -38,6 +39,7 @@ import type { ExecutionMode } from '@/lib/modes'
 import { supportsImageGeneration, type ChatIntent, type ComposerPreference } from '@/lib/chat-intent'
 import ThemeSwitch from '@/components/ui/theme-switch'
 import { Switch } from '@/components/ui/switch'
+import { RichButton } from './rich-button'
 
 export interface MessageFileAttachment {
   kind: 'file'
@@ -841,12 +843,15 @@ export default function ChatArea({
             >
               <div className="flex items-center justify-between px-4 pt-3 text-[10px] font-mono text-[#6E6D6A] dark:text-[#9E9D9A]">
                 <span className=" tracking-tighter">{language}</span>
-                <button
+                <RichButton
+                  type="button"
+                  aria-label="Copy code"
+                  title="Copy code"
                   onClick={() => navigator.clipboard.writeText(source)}
                   className="hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3] transition-colors cursor-pointer"
                 >
                   Copy code
-                </button>
+                </RichButton>
               </div>
               <pre className="px-4 pt-2 pb-4 overflow-x-auto text-[11px] font-mono leading-relaxed">
                 <code
@@ -1072,6 +1077,7 @@ export default function ChatArea({
           <div className="flex items-center gap-0.5">
             {retry && (
               <button
+                type="button"
                 onClick={retry.onClick}
                 // aria-disabled (not disabled) so the explanatory tooltip still shows.
                 aria-disabled={!retry.onClick}
@@ -1088,10 +1094,11 @@ export default function ChatArea({
               </button>
             )}
             <button
+              type="button"
+              aria-label="Copy response"
+              title="Copy response"
               onClick={() => navigator.clipboard.writeText(message.content)}
               className="p-1 rounded-md text-[#9E9D9A] dark:text-[#6E6D6A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3] hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] transition-colors cursor-pointer"
-              title="Copy response"
-              aria-label="Copy response"
             >
               <HugeiconsIcon icon={Copy01Icon} size={13} />
             </button>
@@ -1120,6 +1127,7 @@ export default function ChatArea({
       <Popover.Trigger asChild>
         <button
           type="button"
+          onClick={() => setIsModelDropdownOpen(true)}
           aria-label={`Model: ${activeModels.length ? selectedModelObj.name : 'Choose model'}`}
           title="Switch model for the next message"
           className="flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-full border border-[#E5E3DF] px-2.5 text-xs font-medium text-[#2E2E2D] hover:bg-[#F1EFEA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:border-[#4d4d4d] dark:text-[#EAE8E3] dark:hover:bg-[#2C2C2A]"
@@ -1338,9 +1346,9 @@ export default function ChatArea({
               <div className="max-w-xl space-y-4">
                 {/* Clean large icon logo */}
 
-                <h2 className="text-2xl font-semibold tracking-tight text-[#2E2E2D] dark:text-[#EAE8E3] mb-2">
+                <GradientWaveText ariaLabel="intro text" className="text-2xl font-semibold tracking-tight text-[#5e5e5e] dark:text-[#EAE8E3] mb-2 min-h-[1em]">
                   Hey welcome back, what&apos;s in your mind today?
-                </h2>
+                </GradientWaveText>
               </div>
 
               {/* Render centered PromptBox when chat has no messages */}

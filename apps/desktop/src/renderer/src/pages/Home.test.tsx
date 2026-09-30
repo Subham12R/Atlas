@@ -390,6 +390,7 @@ it('follows an Auto tool call and sends the routed reasoning level', async () =>
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Latest news on the merger' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
   await screen.findByText('Fresh')
+  expect(screen.getByText(/Auto route: documentation · installed:7b · low reasoning · web search · needs current web info/)).toBeTruthy()
   const route = fetch.mock.calls.find(([url]) => String(url).endsWith('/routing/turn'))
   expect(JSON.parse(String(route?.[1]?.body))).toMatchObject({ reasoning: 'max' })
   const agent = fetch.mock.calls.find(([url]) => String(url).endsWith('/agent/stream'))

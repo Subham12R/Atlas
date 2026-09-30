@@ -192,6 +192,29 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
             registry.assert_not_called()
         self.assertNotIn('PRIVATE-DO-NOT-SEARCH', str(events))
 
+    async def test_short_do_followup_does_not_search_the_literal_word(self):
+        from tools.contracts import AgentTurnRequest
+        class Writer:
+            async def run_turn(self, *args): return AdapterTurn('Wrong search [S1]')
+        class Registry:
+            def __init__(self): self.calls = []
+            async def run(self, *args, **kwargs):
+                self.calls.append(args)
+                source = {'source_id': 'S1', 'title': 'Wrong DO result',
+                          'url': 'https://example.org/', 'host': 'example.org', 'snippet': 'unrelated'}
+                return ToolResult(summary='found', data={'results': [source]}, source_ids=['S1'])
+        registry = Registry()
+        events = []
+        with patch('agents.runner.default_registry', return_value=registry):
+            await run_selected(AgentTurnRequest(prompt='do', mode='search_web', recent=[
+                {'role': 'user', 'content': 'PRIVATE-DO-NOT-SEARCH'}
+            ]), Writer(), 'fake', None, events.append, asyncio.Event())
+        self.assertEqual(registry.calls, [])
+        reply = next(e['text'] for e in events if e['type'] == 'assistant.delta')
+        self.assertIn('subject', reply.lower())
+        self.assertNotIn('PRIVATE-DO-NOT-SEARCH', str(events))
+        self.assertEqual(next(e['status'] for e in events if e['type'] == 'run.completed'), 'partial')
+
     async def test_search_mode_keeps_issued_citations_and_metadata(self):
         from adapters.base import AdapterTurn
         from tools.contracts import AgentTurnRequest

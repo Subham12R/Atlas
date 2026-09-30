@@ -153,9 +153,13 @@ async def run_selected(body: AgentTurnRequest, session_adapter, provider: str,
     writer = brain.adapter if brain is not None else session_adapter
     if cancelled.is_set():
         raise asyncio.CancelledError()
-    # ponytail: conservative pronoun guard; resolve only explicitly public context if follow-ups need automation.
-    if body.mode in {'search_web', 'research'} and re.search(r'\b(his|her|their|its|that (?:portfolio|person|paper|article|source|site))\b', body.prompt, re.I):
-        answer = 'Whose information should I search for? Please include the person or organization name.'
+    # ponytail: ambiguous follow-ups need an explicit subject; never build public queries from private history.
+    short_confirmation = body.prompt.strip().casefold() == 'do'
+    if body.mode in {'search_web', 'research'} and (short_confirmation or re.search(
+        r'\b(his|her|their|its|that (?:portfolio|person|paper|article|source|site))\b', body.prompt, re.I
+    )):
+        answer = ('What subject should I search for? Please include a name or topic.' if short_confirmation else
+                  'Whose information should I search for? Please include the person or organization name.')
         emit({'type': 'run.started', 'run_id': run_id, 'mode': body.mode})
         if brain is not None:
             _, recall = brain.prepare_agent_turn(body.prompt)

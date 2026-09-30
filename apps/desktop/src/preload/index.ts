@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { LocalRuntimeId, LocalRuntimeStatus } from '../shared/localRuntime'
 
 export interface Profile {
   name: string
@@ -20,7 +21,15 @@ export interface RegisterProfile {
 const api = {
   exportPdf: (html: string): Promise<{ ok: boolean; path?: string; canceled?: boolean }> =>
     ipcRenderer.invoke('export-pdf', html),
-  getBackendUrl: (): Promise<string | null> => ipcRenderer.invoke('get-backend-url'),
+  chooseDocumentDestination: (draftId: string, filename: string): Promise<
+    { canceled: true } | { canceled: false; token: string; path: string; exists: boolean }
+  > => ipcRenderer.invoke('choose-document-destination', draftId, filename),
+  saveDocument: (request: {
+    draftId: string; filename: string; content: string; destinationToken: string; overwrite?: boolean
+  }): Promise<{ status: 'saved' | 'exists'; path: string; duplicate?: boolean }> =>
+    ipcRenderer.invoke('save-document', request),
+  getBackendConnection: (): Promise<{ url: string; token: string } | null> =>
+    ipcRenderer.invoke('get-backend-connection'),
   getProfile: (): Promise<Profile> => ipcRenderer.invoke('get-profile'),
   setProfile: (profile: Profile): Promise<void> => ipcRenderer.invoke('set-profile', profile),
   hasAppPassword: (): Promise<boolean> => ipcRenderer.invoke('has-app-password'),
@@ -28,6 +37,12 @@ const api = {
     ipcRenderer.invoke('set-app-password', password),
   verifyAppPassword: (password: string): Promise<boolean> =>
     ipcRenderer.invoke('verify-app-password', password),
+  getLocalRuntimeStatus: (runtimeId: LocalRuntimeId): Promise<LocalRuntimeStatus> =>
+    ipcRenderer.invoke('local-runtime:status', runtimeId),
+  startLocalRuntime: (runtimeId: LocalRuntimeId): Promise<LocalRuntimeStatus> =>
+    ipcRenderer.invoke('local-runtime:start', runtimeId),
+  stopLocalRuntime: (runtimeId: LocalRuntimeId): Promise<LocalRuntimeStatus> =>
+    ipcRenderer.invoke('local-runtime:stop', runtimeId),
   getChats: (): Promise<unknown[]> => ipcRenderer.invoke('get-chats'),
   setChats: (chats: unknown[]): Promise<void> => ipcRenderer.invoke('set-chats', chats),
   minimizeWindow: (): void => ipcRenderer.send('window-minimize'),

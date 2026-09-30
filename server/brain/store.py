@@ -69,7 +69,8 @@ class MemoryStore:
 
     def search(self, embedding: list[float], k: int = 6,
               max_distance: float | None = None,
-              preferred_thread_id: str | None = None) -> list[tuple]:
+              preferred_thread_id: str | None = None,
+              scope_thread_id: str | None = None) -> list[tuple]:
         """Nearest chunks -> [(text, thread_id, distance), ...].
 
         `vec_chunks` uses `distance_metric=cosine` (0 = identical, 2 = opposite).
@@ -83,14 +84,17 @@ class MemoryStore:
         """
         pool = max(k * 4, 24) if max_distance is not None else k
         rows = self.con.execute(
-            """WITH knn AS (
+            """WITH scoped AS (
+                   SELECT id FROM chunks WHERE (? IS NULL OR thread_id = ?)
+               ), knn AS (
                    SELECT rowid AS cid, distance FROM vec_chunks
-                   WHERE embedding MATCH ? ORDER BY distance LIMIT ?
+                   WHERE embedding MATCH ? AND rowid IN (SELECT id FROM scoped)
+                   ORDER BY distance LIMIT ?
                )
                SELECT c.text, c.thread_id, knn.distance
                FROM knn JOIN chunks c ON c.id = knn.cid
                ORDER BY knn.distance""",
-            (_pack(embedding), pool)).fetchall()
+            (scope_thread_id, scope_thread_id, _pack(embedding), pool)).fetchall()
 
         if max_distance is not None:
             rows = [r for r in rows if r["distance"] <= max_distance][:k * 3]
@@ -159,6 +163,8 @@ class MemoryStore:
 
     def wipe_all(self) -> None:
         """Delete every row across all tables -- used by full account reset."""
+        self.con.execute("DELETE FROM document_chunks")
+        self.con.execute("DELETE FROM documents")
         self.con.execute("DELETE FROM edges")
         self.con.execute("DELETE FROM entities")
         self.con.execute("DELETE FROM vec_chunks")

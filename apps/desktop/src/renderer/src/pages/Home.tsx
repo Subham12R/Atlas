@@ -5,6 +5,9 @@ import Library from '@/components/Library'
 import Profile from '@/components/Profile'
 import Help from '@/components/Help'
 import type { Attachment, FileAttachment } from '@/components/ui/chatgpt-prompt-input'
+import { modeForTool, type AgentEvent } from '@/lib/agent-events.mjs'
+import type { ExecutionMode } from '@/lib/modes'
+import type { ComposerPreference } from '@/lib/chat-intent'
 
 interface UserProfile {
   name: string
@@ -22,11 +25,12 @@ import {
   createSession,
   friendlyErrorMessage,
   generateImage,
+  routeTurn,
   sendMessageStream,
-  webSearch,
+  sendAgentStream,
+  type DraftKind,
   type ImagePayload,
-  type MemoryRecall,
-  type SearchResult
+  type MemoryRecall
 } from '@/lib/api'
 
 function timestamp(): string {
@@ -45,21 +49,6 @@ function detectImageIntent(content: string): boolean {
   return IMAGE_INTENT_RE.test(content)
 }
 
-function applyTool(content: string, tool: string | null): string {
-  switch (tool) {
-    case 'searchWeb':
-      return `Search the web for current, up-to-date information and use it to answer:\n\n${content}`
-    case 'deepResearch':
-      return `Do deep, thorough research covering multiple angles and sources, then answer:\n\n${content}`
-    case 'writeCode':
-      return `Focus on writing clean, correct, well-structured code for the following:\n\n${content}`
-    case 'thinkLonger':
-      return `Think through this carefully, step by step, before giving your final answer:\n\n${content}`
-    default:
-      return content
-  }
-}
-
 /** Inlines attached text files as fenced blocks after the prompt text -- the
  * only channel a non-vision file's content can reach the model through.
  * Images are handled separately (sent as real vision content, see `images`
@@ -75,20 +64,6 @@ function applyAttachments(content: string, attachments: Attachment[]): string {
 function splitDataUrl(dataUrl: string): { data: string; mime: string } {
   const match = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl)
   return match ? { mime: match[1], data: match[2] } : { mime: 'image/png', data: '' }
-}
-
-/** Folds real Tavily search results into the prompt -- the model answers
- * from these directly, and the same results become the source pins shown
- * under the reply (see Message.sources in ChatArea.tsx). */
-function buildSearchContext(results: SearchResult[]): string {
-  if (results.length === 0) return ''
-  const lines = results
-    .map((r, i) => `[${i + 1}] ${r.title}\n${r.content}\nSource: ${r.url}`)
-    .join('\n\n')
-  return (
-    `[Web search results]\n${lines}\n\n` +
-    `Using the search results above, answer the user's question that follows.\n\n`
-  )
 }
 
 /** Last 2 exchanges (up to 4 messages) of the chat so far, handed to a newly
@@ -162,6 +137,8 @@ function Home(): React.JSX.Element {
   const [chatsLoaded, setChatsLoaded] = useState(false)
   const hasLoadedStoredChats = useRef(false)
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
+  // UI preference only; never persisted as an approval or inherited by a new chat.
+  const [composerByChat, setComposerByChat] = useState<Record<string, ComposerPreference>>({})
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeView, setActiveView] = useState<View>('chat')
@@ -170,7 +147,19 @@ function Home(): React.JSX.Element {
   const activeChat = chats.find((chat) => chat.id === activeChatId) || null
   const abortControllers = useRef(new Map<string, AbortController>())
   const queuedMessages = useRef(
-    new Map<string, { content: string; tool: string | null; provider: string; model: string | null; attachments: Attachment[] }[]>()
+    new Map<
+      string,
+      {
+        content: string
+        tool: string | null
+        provider: string
+        model: string | null
+        attachments: Attachment[]
+        mode: ExecutionMode
+        draftKind: DraftKind
+        preferredModel: boolean
+      }[]
+    >()
   )
   const processingQueued = useRef(new Set<string>())
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -249,6 +238,11 @@ function Home(): React.JSX.Element {
       })
     }
     setChats((prev) => prev.filter((c) => c.id !== id))
+    setComposerByChat((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
     if (activeChatId === id) {
       const remaining = chats.filter((c) => c.id !== id)
       setActiveChatId(remaining.length > 0 ? remaining[0].id : null)
@@ -281,14 +275,17 @@ function Home(): React.JSX.Element {
     tool: string | null,
     provider: string,
     model: string | null,
-    attachments: Attachment[]
+    attachments: Attachment[],
+    mode: ExecutionMode,
+    draftKind: DraftKind = 'research_brief',
+    preferredModel = false
   ): Promise<void> => {
     let chatId = activeChatId
     let baseChat = chatId ? chats.find((c) => c.id === chatId) : undefined
 
     if (baseChat?.isSending && chatId && !processingQueued.current.has(chatId)) {
       const queue = queuedMessages.current.get(chatId) || []
-      queue.push({ content, tool, provider, model, attachments })
+      queue.push({ content, tool, provider, model, attachments, mode, draftKind, preferredModel })
       queuedMessages.current.set(chatId, queue)
       setChats((prev) =>
         prev.map((chat) =>
@@ -311,6 +308,11 @@ function Home(): React.JSX.Element {
         threadId: null
       }
       setChats((prev) => [baseChat as Chat, ...prev])
+      const newId = chatId
+      setComposerByChat((prev) => {
+        const { new: blank, ...rest } = prev
+        return blank ? { ...rest, [newId]: blank } : rest
+      })
       setActiveChatId(chatId)
     }
 
@@ -443,12 +445,6 @@ function Home(): React.JSX.Element {
       return
     }
 
-    // A chat with an established provider that picks a different one mid-
-    // conversation gets a fresh session -- a brand new chat (provider still
-    // null) is never treated as a "switch".
-    const switchingProvider =
-      !!baseChat.provider && (baseChat.provider !== provider || baseChat.model !== model)
-
     // Set once the (empty) assistant placeholder is pushed, so a failure
     // partway through streaming can turn that same bubble into the error
     // instead of leaving a permanently blank one sitting next to a separate
@@ -456,32 +452,39 @@ function Home(): React.JSX.Element {
     let assistantMsgId: string | null = null
 
     try {
+      const agentMode = modeForTool(resolvedTool)
+      const route = mode === 'auto' && agentMode === 'chat'
+        ? await routeTurn(content, mode,
+            preferredModel ? { provider, model: model || '' } : undefined,
+            controller.signal)
+        : null
+      if (route && (
+        !['ready', 'degraded'].includes(route.state) || !route.model || !route.provider ||
+        (route.provider !== 'local' && (!preferredModel || route.provider !== provider))
+      )) {
+        throw new ApiError(409, route.reason || 'No permitted model is available')
+      }
+      // Only an explicitly selected cloud model can leave the loopback-only Auto path.
+      const turnMode = route?.provider && route.provider !== 'local' ? route.mode : mode
+      const routedProvider = route?.provider ?? provider
+      const routedModel = route?.model ?? model
+      // A new route gets a new session; the previous provider context is explicitly bounded.
+      const switchingProvider = !!baseChat.provider &&
+        (baseChat.provider !== routedProvider || baseChat.model !== routedModel)
       let sessionId = baseChat.sessionId
       let threadId = baseChat.threadId
-      let chatProvider = baseChat.provider ?? provider
-      let chatModel = baseChat.model ?? model
+      let chatProvider = baseChat.provider ?? routedProvider
+      let chatModel = baseChat.model ?? routedModel
 
+      const previousSessionId = switchingProvider ? sessionId : null
       if (switchingProvider) {
-        if (sessionId) closeSession(sessionId).catch(() => {})
         sessionId = null
         threadId = null
-        chatProvider = provider
-        chatModel = model
+        chatProvider = routedProvider
+        chatModel = routedModel
       }
 
-      // Research mode is the same real search, just cast a wider net --
-      // more results to synthesize from, no separate multi-step agent.
-      let searchResults: SearchResult[] = []
-      if (resolvedTool === 'searchWeb' || resolvedTool === 'deepResearch') {
-        const maxResults = resolvedTool === 'deepResearch' ? 8 : 5
-        searchResults = (await webSearch(content, maxResults)).results
-      }
-
-      let promptToSend = applyAttachments(applyTool(content, resolvedTool), attachments)
-      promptToSend = buildFormattingRules() + promptToSend
-      if (searchResults.length > 0) {
-        promptToSend = buildSearchContext(searchResults) + promptToSend
-      }
+      let promptToSend = buildFormattingRules() + applyAttachments(content, attachments)
       if (profile) {
         promptToSend = buildPersonalizationContext(profile) + promptToSend
       }
@@ -489,11 +492,17 @@ function Home(): React.JSX.Element {
         promptToSend = buildSwitchContext(baseChat.messages) + promptToSend
       }
 
+      if (controller.signal.aborted) throw new ApiAborted('request aborted')
       if (!sessionId) {
         const session = await createSession(chatProvider, false, chatModel)
+        if (controller.signal.aborted) {
+          closeSession(session.session_id).catch(() => {})
+          throw new ApiAborted('request aborted')
+        }
         sessionId = session.session_id
         threadId = session.thread_id
         chatProvider = session.provider
+        if (previousSessionId) void closeSession(previousSessionId).catch(() => {})
         setChats((prev) =>
           prev.map((chat) =>
             chat.id === targetChatId
@@ -513,10 +522,7 @@ function Home(): React.JSX.Element {
         model: chatModel || undefined,
         isNew: true,
         tool: resolvedTool || undefined,
-        sources:
-          searchResults.length > 0
-            ? searchResults.map((r) => ({ title: r.title, url: r.url }))
-            : undefined
+        routeReason: route ? `${route.mode} · ${route.model} · ${route.reason}` : undefined
       }
 
       setChats((prev) =>
@@ -554,17 +560,93 @@ function Home(): React.JSX.Element {
         )
       }
 
-      try {
-        await sendMessageStream(
-          sessionId,
-          promptToSend,
-          imagePayloads,
-          handleStreamToken,
-          handleMemoryRecall,
-          controller.signal
+      const handleAgentEvent = (event: AgentEvent): void => {
+        if (event.type === 'assistant.delta') {
+          handleStreamToken(event.text)
+          return
+        }
+        setChats((prev) =>
+          prev.map((chat) => {
+            if (chat.id !== targetChatId) return chat
+            return {
+              ...chat,
+              messages: chat.messages.map((message) => {
+                if (message.id !== assistantMsgId) return message
+                if (event.type === 'source.found') {
+                  return {
+                    ...message,
+                    sources: [...(message.sources || []).filter((source) =>
+                      source.source_id !== event.source.source_id
+                    ), event.source]
+                  }
+                }
+                if (event.type === 'attachment.found') {
+                  return {
+                    ...message,
+                    attachmentSources: [...(message.attachmentSources || []), event.attachment]
+                  }
+                }
+                if (event.type === 'run.completed') {
+                  return {
+                    ...message,
+                    sources: event.sources || message.sources,
+                    queries: event.queries || message.queries,
+                    attachmentSources: event.attachments || message.attachmentSources,
+                    draft: event.draft || undefined,
+                    runStatus: event.status,
+                    runPhase: event.reason || undefined
+                  }
+                }
+                if (event.type === 'plan.ready') return {
+                  ...message,
+                  queries: event.queries,
+                  researchPlan: { objective: event.objective, freshness: event.freshness,
+                    source_criteria: event.source_criteria },
+                  runPhase: 'Searching'
+                }
+                if (event.type === 'plan.degraded') return { ...message, runPhase: 'Planning degraded' }
+                if (event.type === 'tool.started') {
+                  return { ...message, runPhase: event.tool === 'fetch_page' ? 'Reading sources' : 'Searching' }
+                }
+                if (event.type === 'tool.progress') return { ...message, runPhase: event.phase }
+                if (event.type === 'tool.failed') return { ...message, runPhase: event.reason || 'Partial results' }
+                return message
+              })
+            }
+          })
         )
+      }
+
+      try {
+        if (agentMode !== 'chat') {
+          const recent = baseChat.messages.slice(-4).map((message) => ({
+            role: message.sender,
+            content: message.content.slice(0, 2000)
+          }))
+          await sendAgentStream(sessionId, {
+            prompt: content,
+            mode: agentMode,
+            draft_kind: agentMode === 'draft' ? draftKind : undefined,
+            instructions: buildFormattingRules() + (profile ? buildPersonalizationContext(profile) : ''),
+            images: imagePayloads,
+            recent,
+            attachments: attachments
+              .filter((att): att is FileAttachment => att.kind === 'file')
+              .map((att) => ({ id: att.id, name: att.name, mime: 'text/plain', content: att.content }))
+          }, handleAgentEvent, controller.signal)
+        } else {
+          await sendMessageStream(
+            sessionId,
+            promptToSend,
+            imagePayloads,
+            handleStreamToken,
+            handleMemoryRecall,
+            controller.signal,
+            turnMode
+          )
+        }
       } catch (err) {
-        if (err instanceof ApiError && err.status === 404) {
+        if (agentMode === 'chat' && err instanceof ApiError && err.status === 404) {
           // session vanished (e.g. server restarted) -- transparently re-create
           const session = await createSession(chatProvider, false, chatModel)
           sessionId = session.session_id
@@ -591,7 +673,8 @@ function Home(): React.JSX.Element {
             imagePayloads,
             handleStreamToken,
             handleMemoryRecall,
-            controller.signal
+            controller.signal,
+            turnMode
           )
         } else {
           throw err
@@ -611,7 +694,7 @@ function Home(): React.JSX.Element {
     } catch (err) {
       // Deliberately stopped by the user -- handleStopSending() already reset
       // isSending, so there's nothing further to do here.
-      if (err instanceof ApiAborted) return
+      if (err instanceof ApiAborted || controller.signal.aborted) return
 
       const detail = friendlyErrorMessage(
         err,
@@ -657,7 +740,16 @@ function Home(): React.JSX.Element {
       )
       if (next) {
         processingQueued.current.add(targetChatId)
-        void handleSendMessage(next.content, next.tool, next.provider, next.model, next.attachments)
+        void handleSendMessage(
+          next.content,
+          next.tool,
+          next.provider,
+          next.model,
+          next.attachments,
+          next.mode,
+          next.draftKind,
+          next.preferredModel
+        )
       }
     }
   }
@@ -704,6 +796,14 @@ function Home(): React.JSX.Element {
           isSidebarCollapsed={isSidebarCollapsed}
           setIsSidebarCollapsed={setIsSidebarCollapsed}
           activeChat={activeChat}
+          composerPreference={composerByChat[activeChatId ?? 'new']}
+          onComposerChange={(update) => {
+            const key = activeChatId ?? 'new'
+            setComposerByChat((prev) => ({ ...prev, [key]: {
+              intent: update.intent ?? prev[key]?.intent ?? 'auto',
+              draftKind: update.draftKind ?? prev[key]?.draftKind ?? 'research_brief'
+            } }))
+          }}
           onSendMessage={handleSendMessage}
           onNewChat={handleNewChat}
           onTogglePin={handleTogglePin}

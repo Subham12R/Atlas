@@ -7,25 +7,29 @@ Two ways to talk to a provider:
   * Stateful session:    POST /sessions ...    (keeps multi-turn context)
 
 A stateful session is kept server-side in an in-memory registry and its calls
-are serialized with a per-session lock. This is a single-process PoC store --
-no auth, no persistence.
+are serialized with a per-session lock. All HTTP endpoints require a per-run
+ATLAS_API_TOKEN bearer token; sessions themselves are not persistent.
 
-Run:  uvicorn api:app --reload
-Docs: http://127.0.0.1:8000/docs
+Run: set ATLAS_API_TOKEN in both development processes, then start uvicorn.
 """
 from __future__ import annotations
 
 import asyncio
+import os
+import re
+import secrets
 import uuid
 from contextlib import asynccontextmanager
+from typing import Literal
 
 import json
+import logging
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import credentials_store
 import chat_store
@@ -33,12 +37,27 @@ import imagegen
 import voice
 import websearch
 from adapters.base import ImageInput
+from adapters.openai_adapter import OpenAIAdapter, DEFAULT_MODEL as OPENAI_DEFAULT_MODEL
+from adapters.anthropic_adapter import AnthropicAdapter, DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL
+from adapters.gemini_adapter import GeminiAdapter, DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
+from adapters.openrouter_adapter import DEFAULT_MODEL as OPENROUTER_DEFAULT_MODEL
+from tools.contracts import AgentEventAdapter, AgentTurnRequest
+from tools.registry import ToolDenied, ToolNotFound
+from agents.runner import run_selected
 from factory import (ANON_OK, BRAIN_ENABLED, BRAIN_TOPK, IMAGE_GEN_MODELS,
                      IMAGE_GEN_PROVIDERS, MODELS, PROVIDERS, AuthMissing,
                      build_adapter, build_brain, get_embedder, get_store)
+from policy import ExecutionMode, ExecutionPolicy, ModelCandidate
+from routing import choose_model, is_loopback_endpoint
+from brain.documents import Documents
 
 TAVILY_KEY = "TAVILY_API_KEY"
 GROQ_KEY = "GROQ_API_KEY"
+API_TOKEN = os.environ.get('ATLAS_API_TOKEN') or secrets.token_urlsafe(32)
+if len(API_TOKEN) < 32 or len(API_TOKEN) > 256 or not API_TOKEN.isascii() or any(
+    char.isspace() for char in API_TOKEN
+):
+    raise RuntimeError('ATLAS_API_TOKEN must be a strong ASCII token without whitespace')
 
 SESSIONS: dict[str, tuple] = {}
 
@@ -63,12 +82,75 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Atlas API", version="1.0", lifespan=lifespan)
 
+# Packaged Electron loads file:// (opaque Origin: null); dev Vite uses 5173.
+ALLOWED_ORIGINS = ("null", "http://localhost:5173", "http://127.0.0.1:5173")
+
+
+@app.middleware("http")
+async def require_local_token(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if origin and origin not in ALLOWED_ORIGINS:
+        return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
+    if not API_TOKEN:
+        return JSONResponse({"detail": "Local API authentication is not configured"}, status_code=503)
+    provided = request.headers.get("authorization", "")
+    if not provided.isascii() or not secrets.compare_digest(provided, f"Bearer {API_TOKEN}"):
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401,
+                            headers={"WWW-Authenticate": "Bearer"})
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+class ModelPreference(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    provider: Literal['local', 'openai', 'anthropic', 'gemini', 'openrouter']
+    model: str = Field(max_length=200)
+
+
+class TurnRouteRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    prompt: str = Field(min_length=1, max_length=10000)
+    mode: ExecutionMode = ExecutionMode.AUTO
+    preference: ModelPreference | None = None
+
+
+@app.post('/routing/turn')
+async def route_turn(body: TurnRouteRequest):
+    # Cloud requires a named, configured model preference; never silently fall back to it.
+    preference = ((body.preference.provider, body.preference.model)
+                  if body.preference else None)
+    candidates = []
+    if preference and preference[0] != 'local':
+        provider = preference[0]
+        if credentials_store.get_value(PROVIDER_ENV_KEYS[provider]):
+            defaults = {'openai': OPENAI_DEFAULT_MODEL, 'anthropic': ANTHROPIC_DEFAULT_MODEL,
+                        'gemini': GEMINI_DEFAULT_MODEL, 'openrouter': OPENROUTER_DEFAULT_MODEL}
+            model = (credentials_store.get_value('OPENROUTER_MODEL') or defaults[provider]
+                     if provider == 'openrouter' else defaults[provider])
+            candidates.append(ModelCandidate(provider, model,
+                                             frozenset({'research', 'coding', 'documentation'}), False))
+            preference = (provider, preference[1] or model)
+    else:
+        base_url = _local_base_url()
+        local_model = credentials_store.get_value('LOCAL_LLM_MODEL')
+        models = ([local_model] if local_model else await _discover_local_models(base_url)) \
+            if is_loopback_endpoint(base_url) else []
+        candidates = [ModelCandidate('local', model,
+                                     frozenset({'research', 'coding', 'documentation'}), True)
+                      for model in models if model and not re.search(
+                          r'(embedding|embed-|unlimited-ocr|\bocr\b)', model, re.I)]
+    decision = choose_model(body.prompt, body.mode, candidates,
+                            ExecutionPolicy(allow_cloud=bool(preference and preference[0] != 'local')),
+                            preference)
+    return {'state': decision.state, 'mode': decision.mode, 'provider': decision.provider,
+            'model': decision.model, 'reason': decision.reason}
 
 
 class SessionCreate(BaseModel):
@@ -85,6 +167,7 @@ class ImagePayload(BaseModel):
 class Message(BaseModel):
     prompt: str
     images: list[ImagePayload] | None = None
+    mode: ExecutionMode = ExecutionMode.AUTO
 
 
 class ChatOnce(BaseModel):
@@ -93,12 +176,18 @@ class ChatOnce(BaseModel):
     anonymous: bool = False
     model: str | None = None
     images: list[ImagePayload] | None = None
+    mode: ExecutionMode = ExecutionMode.AUTO
 
 
 class MemorySearch(BaseModel):
     q: str
     k: int = BRAIN_TOPK
     graph: bool = True
+
+
+class DocumentCreate(BaseModel):
+    name: str
+    text: str
 
 
 class ImageGenerate(BaseModel):
@@ -108,8 +197,15 @@ class ImageGenerate(BaseModel):
 
 
 class WebSearchRequest(BaseModel):
-    query: str
-    max_results: int = 5
+    query: str = Field(min_length=1, max_length=1000)
+    max_results: int = Field(default=5, ge=1, le=8)
+
+    @field_validator("query")
+    @classmethod
+    def nonempty_query(cls, query: str) -> str:
+        if not query.strip():
+            raise ValueError("query must not be blank")
+        return query
 
 
 class SearchSettingsUpdate(BaseModel):
@@ -232,8 +328,17 @@ def _err_detail(e: Exception) -> str:
 @app.get("/providers")
 async def list_providers():
     """Provider capabilities: anonymous support + suggested model slugs."""
-    return [{"provider": p, "anonymous": p in ANON_OK, "models": MODELS.get(p, [])}
-            for p in PROVIDERS]
+    capabilities = {
+        'openai': OpenAIAdapter.capabilities,
+        'anthropic': AnthropicAdapter.capabilities,
+        'gemini': GeminiAdapter.capabilities,
+    }
+    return [{"provider": p, "anonymous": p in ANON_OK, "models": MODELS.get(p, []),
+             "capabilities": {
+                 "tool_calls": p in capabilities and capabilities[p].tool_calls,
+                 "streamed_arguments": p in capabilities and capabilities[p].streamed_arguments,
+                 "tool_models": list(capabilities[p].supported_models) if p in capabilities else []
+             }} for p in PROVIDERS]
 
 
 @app.get("/settings/providers")
@@ -372,7 +477,7 @@ async def transcribe_audio(body: TranscribeRequest):
 
 @app.post("/account/reset")
 async def reset_account():
-    """Wipe all shared server-side state -- saved provider credentials and all
+    """Wipe all shared server-side state -- credentials, document indexes and
     brain memory (threads/messages/chunks/entities/edges). Used when a user
     deletes their account from the desktop app; closes any live sessions
     first, since their state no longer exists after the wipe."""
@@ -384,8 +489,7 @@ async def reset_account():
     SESSIONS.clear()
     credentials_store.clear_all()
     chat_store.clear_all()
-    if BRAIN_ENABLED:
-        get_store().wipe_all()
+    get_store().wipe_all()
     return {"ok": True}
 
 
@@ -411,8 +515,25 @@ async def generate_image(body: ImageGenerate):
     return {"images": images}
 
 
+async def _search_until_disconnect(request: Request, search):
+    """Cancel the upstream task when the client abandons the HTTP request."""
+    task = asyncio.create_task(search)
+    try:
+        while not task.done():
+            if await request.is_disconnected():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise asyncio.CancelledError()
+            await asyncio.wait({task}, timeout=0.1)
+        return await task
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
 @app.post("/websearch")
-async def web_search(body: WebSearchRequest):
+async def web_search(body: WebSearchRequest, request: Request):
     """Real internet search (Tavily) backing the Search-web/Research-mode
     tools. Returns titles/urls/content for the caller to fold into the prompt
     and to show as source pins under the reply -- no conversation state here,
@@ -421,9 +542,17 @@ async def web_search(body: WebSearchRequest):
     if not api_key:
         raise HTTPException(400, "no Tavily API key configured")
     try:
-        results = await websearch.search(api_key, body.query, body.max_results)
-    except Exception as e:
-        raise HTTPException(502, f"web search failed: {_err_detail(e)}")
+        results = await _search_until_disconnect(
+            request, websearch.search(api_key, body.query, body.max_results)
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(504, "web search timed out")
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise HTTPException(429, "web search rate limited")
+        raise HTTPException(502, "web search provider failed")
+    except Exception:
+        raise HTTPException(502, "web search failed")
     return {"results": results}
 
 
@@ -451,7 +580,11 @@ async def test_provider_connection(provider: str):
 @app.post("/chat")
 async def chat_once(body: ChatOnce):
     """One-shot, stateless: no conversation context is retained."""
+    if body.mode is ExecutionMode.AUTO and (body.provider != 'local' or
+                                            not is_loopback_endpoint(_local_base_url())):
+        raise HTTPException(403, 'Auto requires a permitted loopback model; select an explicit mode for a cloud model')
     adapter = _build(body.provider, body.anonymous, body.model)
+    _check_auto_session(body.mode, adapter)
     try:
         await adapter.init()
         reply = await adapter.send(body.prompt, _images(body.images))
@@ -479,9 +612,23 @@ async def create_session(body: SessionCreate):
             "thread_id": getattr(adapter, "thread_id", None)}
 
 
+def _check_auto_session(mode: ExecutionMode, adapter) -> None:
+    if mode is not ExecutionMode.AUTO:
+        return
+    writer = getattr(adapter, 'adapter', adapter)
+    base_url = getattr(getattr(writer, '_client', None), 'base_url', '')
+    if (getattr(adapter, 'provider', getattr(adapter, 'name', None)) != 'local' or
+            not is_loopback_endpoint(str(base_url))):
+        raise HTTPException(403, 'Auto requires a permitted loopback model; select an explicit mode for a cloud model')
+    # Brain enrichment may use a separate cloud summarizer even with a local chat adapter.
+    if hasattr(adapter, 'auto_summary'):
+        adapter.auto_summary = False
+
+
 @app.post("/sessions/{sid}/messages")
 async def send_message(sid: str, body: Message):
     adapter, lock = _get(sid)
+    _check_auto_session(body.mode, adapter)
     async with lock:
         try:
             reply = await adapter.send(body.prompt, _images(body.images))
@@ -493,6 +640,7 @@ async def send_message(sid: str, body: Message):
 @app.post("/sessions/{sid}/messages/stream")
 async def send_message_stream(sid: str, body: Message):
     adapter, lock = _get(sid)
+    _check_auto_session(body.mode, adapter)
 
     async def event_generator():
         async with lock:
@@ -506,6 +654,78 @@ async def send_message_stream(sid: str, body: Message):
                 yield f"data: {json.dumps({'error': _err_detail(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.post("/sessions/{sid}/agent/stream")
+async def agent_stream(sid: str, body: AgentTurnRequest, request: Request):
+    """Stream progress without exposing tool policy or credentials to the renderer."""
+    adapter, lock = _get(sid)
+
+    async def events():
+        queue: asyncio.Queue = asyncio.Queue()
+        cancelled = asyncio.Event()
+        run_id = None
+        phase = None
+
+        async def work():
+            async with lock:
+                def emit(event: dict) -> None:
+                    nonlocal run_id, phase
+                    validated = AgentEventAdapter.validate_python(event)
+                    run_id = event.get('run_id') or run_id
+                    if event['type'] in ('tool.started', 'tool.progress', 'plan.ready'):
+                        phase = event.get('tool') or event.get('phase') or 'planning'
+                    queue.put_nowait(validated.model_dump(exclude_none=True))
+
+                try:
+                    provider = adapter.provider if hasattr(adapter, 'provider') else adapter.name
+                    model = getattr(adapter.adapter if hasattr(adapter, 'adapter') else adapter,
+                                    'model', None)
+                    await run_selected(body, adapter, provider, model, emit, cancelled)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    emit({'type': 'run.cancelled'})
+                except Exception as e:
+                    if isinstance(e, ValueError) and str(e) == 'selected model does not support native tool calls':
+                        code, reason = 'unsupported_model', 'This model cannot choose tools. Choose a supported model, or use Search or Research.'
+                    elif isinstance(e, ValueError) and str(e) == 'no Tavily API key configured':
+                        code, reason = 'key_unavailable', 'Web search needs a Tavily key in Settings.'
+                    elif isinstance(e, (TimeoutError, asyncio.TimeoutError)):
+                        code, reason = 'timeout', 'The agent run timed out. Try again.'
+                    elif isinstance(e, (ToolDenied, ToolNotFound)):
+                        code, reason = 'invalid_call', 'The tool call was denied or unavailable.'
+                    elif isinstance(e, ValueError) and 'budget' in str(e):
+                        code, reason = 'budget', 'The agent reached its tool limit.'
+                    else:
+                        code, reason = 'internal', 'The agent could not complete this run. Try again or change models.'
+                    logging.getLogger(__name__).warning('agent run failed: code=%s run_id=%s phase=%s',
+                                                        code, run_id or 'unknown', phase or 'start')
+                    emit({'type': 'run.failed', 'run_id': run_id, 'code': code,
+                          'phase': phase, 'reason': reason})
+                finally:
+                    queue.put_nowait(None)
+
+        worker = asyncio.create_task(work())
+        try:
+            while True:
+                if await request.is_disconnected():
+                    cancelled.set()
+                    worker.cancel()
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            cancelled.set()
+            if not worker.done():
+                worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
+    return StreamingResponse(events(), media_type='text/event-stream')
 
 
 @app.post("/sessions/{sid}/new_chat")
@@ -522,6 +742,32 @@ async def close_session(sid: str):
     await adapter.close()
     del SESSIONS[sid]
     return {"ok": True}
+
+
+@app.post("/documents", status_code=201)
+def ingest_document(body: DocumentCreate):
+    try:
+        source_id = Documents(get_store().con).ingest_document(body.name, body.text)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"source_id": source_id}
+
+
+@app.get("/documents")
+def list_documents():
+    return Documents(get_store().con).list_documents()
+
+
+@app.get("/documents/search")
+def search_documents(q: str = Query(min_length=1, max_length=512),
+                     limit: int = Query(6, ge=1, le=20)):
+    return Documents(get_store().con).search_documents(q, limit)
+
+
+@app.delete("/documents/{source_id}", status_code=204)
+def delete_document(source_id: str):
+    Documents(get_store().con).delete_document(source_id)
+    return Response(status_code=204)
 
 
 @app.get("/memory/search")

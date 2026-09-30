@@ -1,6 +1,7 @@
 import json
 import os
 import runpy
+import secrets
 import socket
 import subprocess
 import sys
@@ -86,9 +87,11 @@ class EmbeddedServerRuntimeTests(unittest.TestCase):
                 for key in ("PATH", "SYSTEMROOT", "WINDIR", "TMPDIR", "TEMP", "TMP")
                 if key in os.environ
             }
+            token = secrets.token_hex(32)
             env.update(
                 HOME=data_dir,
                 ATLAS_PORT=str(port),
+                ATLAS_API_TOKEN=token,
                 BRAIN_ENABLED="0",
                 BRAIN_DB_PATH=str(Path(data_dir) / "brain.db"),
                 CHATS_DB_PATH=str(Path(data_dir) / "chats.db"),
@@ -103,12 +106,17 @@ class EmbeddedServerRuntimeTests(unittest.TestCase):
                     deadline = time.monotonic() + 55
                     while time.monotonic() < deadline:
                         try:
-                            with urllib.request.urlopen(
-                                f"http://127.0.0.1:{port}/providers", timeout=1
-                            ) as response:
+                            url = f"http://127.0.0.1:{port}/providers"
+                            request = urllib.request.Request(
+                                url, headers={"Authorization": f"Bearer {token}"}
+                            )
+                            with urllib.request.urlopen(request, timeout=1) as response:
                                 self.assertEqual(response.status, 200)
                                 self.assertIsNotNone(json.load(response))
-                                return
+                            with self.assertRaises(urllib.error.HTTPError) as unauthorized:
+                                urllib.request.urlopen(url, timeout=1)
+                            self.assertEqual(unauthorized.exception.code, 401)
+                            return
                         except (OSError, urllib.error.URLError):
                             if process.poll() is not None:
                                 self.fail(

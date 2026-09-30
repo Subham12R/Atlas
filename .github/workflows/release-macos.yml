@@ -38,27 +38,37 @@ jobs:
       - name: Install server build dependencies
         run: python -m pip install --disable-pip-version-check -r server/requirements.txt
 
-      - name: Build ARM64 app and embedded server
+      - name: Run offline backend tests
+        working-directory: server
+        run: python -m unittest discover -s tests -v
+
+      - name: Run desktop tests and typecheck
         working-directory: apps/desktop
         run: |
           npm ci
-          npm run test:backend-port
-          npm run build:mac
+          npm run typecheck
+          npm test -- --run
+          node --test test/*.test.mjs
+
+      - name: Build ARM64 app and embedded server
+        working-directory: apps/desktop
+        run: npm run build:mac
 
       - name: Verify bundle and prepare checksum
         id: artifacts
         run: |
-          app_path="$(find "$GITHUB_WORKSPACE/apps/desktop/dist" -type d -name Atlas.app -print -quit)"
-          test -n "$app_path"
+          app_path="$GITHUB_WORKSPACE/apps/desktop/dist/mac-arm64/Atlas.app"
+          test -d "$app_path"
           codesign --verify --deep --strict --verbose=2 "$app_path"
           server_path="$app_path/Contents/Resources/server/atlas-server"
           test -x "$server_path"
           file "$server_path" | grep -q arm64
 
-          dmg_path="$(find "$GITHUB_WORKSPACE/apps/desktop/dist" -maxdepth 1 -type f -name 'Atlas-*-macos-arm64.dmg' -print -quit)"
-          test -n "$dmg_path"
+          dmg_path="$GITHUB_WORKSPACE/apps/desktop/dist/Atlas-${GITHUB_REF_NAME#v}-macos-arm64.dmg"
+          test -f "$dmg_path"
           hdiutil verify "$dmg_path"
           (cd "$(dirname "$dmg_path")" && shasum -a 256 "$(basename "$dmg_path")" > "$(basename "$dmg_path").sha256")
+          (cd "$(dirname "$dmg_path")" && shasum -a 256 -c "$(basename "$dmg_path").sha256")
           echo "app_path=$app_path" >> "$GITHUB_OUTPUT"
           echo "dmg_path=$dmg_path" >> "$GITHUB_OUTPUT"
 

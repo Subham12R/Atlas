@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
+import * as Popover from '@radix-ui/react-popover'
+import { Check, ChevronDown, Cloud, Cpu, Search } from 'lucide-react'
 import { HugeiconsIcon } from '@hugeicons/react'
 import {
   SidebarRightIcon,
@@ -12,17 +14,26 @@ import {
 import { cn } from '@/lib/utils'
 import { highlightCode } from '@/lib/highlight'
 import { chatToHtml } from '@/lib/exportHtml'
+import { DocumentDraftReview } from '@/components/DocumentDraftReview'
 import { PromptBox, fileIcon, type Attachment } from '@/components/ui/chatgpt-prompt-input'
+import { LoadingState } from '@/components/LoadingState'
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai/reasoning'
 import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai/task'
 import { Plan, PlanHeader, PlanTitle, PlanTrigger, PlanContent } from '@/components/ai/plan'
-import { Sources, SourcesTrigger, SourcesContent, Source } from '@/components/ai/sources'
-import { getLocalModels, getProviderSettings, type MemoryRecall, type ProviderSettingsMap } from '@/lib/api'
+import { Sources, SourcesTrigger, SourcesContent } from '@/components/ai/sources'
+import {
+  friendlyErrorMessage,
+  getLocalModels,
+  getProviderSettings,
+  getProviders,
+  type DraftArtifact,
+  type DraftKind,
+  type MemoryRecall,
+  type ProviderSettingsMap
+} from '@/lib/api'
+import type { ExecutionMode } from '@/lib/modes'
+import type { ChatIntent, ComposerPreference } from '@/lib/chat-intent'
 import ThemeSwitch from '@/components/ui/theme-switch'
-import geminiLogo from '@/assets/icon/gemini.svg'
-import openaiLogo from '@/assets/icon/openai.svg'
-import claudeLogo from '@/assets/icon/claude.png'
-import openRouterLogo from '@/assets/icon/openrouter.png'
 
 export interface MessageFileAttachment {
   kind: 'file'
@@ -55,9 +66,15 @@ export interface Message {
   thinking?: string
   /** Uploaded/generated attachments, rendered as blocks above the text. */
   attachments?: MessageAttachment[]
-  /** Sources consulted for a Search-web/Research-mode reply -- rendered as
-   * circular favicon pins below the response text. */
-  sources?: { title: string; url: string }[]
+  /** Server-issued web sources, shown only when the final answer cites their IDs. */
+  sources?: { title: string; url: string; source_id?: string; snippet?: string; host?: string; fetched?: boolean; published_date?: string; score?: number }[]
+  queries?: string[]
+  researchPlan?: { objective: string; freshness?: string; source_criteria?: string[] }
+  runPhase?: string
+  routeReason?: string
+  runStatus?: 'completed' | 'partial'
+  attachmentSources?: { source_id: string; filename: string; section: string }[]
+  draft?: DraftArtifact
   /** The tool used to produce this reply (searchWeb/deepResearch/thinkLonger/
    * writeCode), if any -- picks the reply's visual treatment (Task trace,
    * Plan card, or the default plain bubble). */
@@ -87,12 +104,17 @@ interface ChatAreaProps {
   isSidebarCollapsed: boolean
   setIsSidebarCollapsed: (collapsed: boolean) => void
   activeChat: Chat | null
+  composerPreference?: ComposerPreference
+  onComposerChange?: (update: Partial<ComposerPreference>) => void
   onSendMessage: (
     content: string,
     tool: string | null,
     provider: string,
     model: string | null,
-    attachments: Attachment[]
+    attachments: Attachment[],
+    mode: ExecutionMode,
+    draftKind: DraftKind,
+    preferredModel: boolean
   ) => void
   onNewChat: () => void
   onTogglePin: (id: string) => void
@@ -106,67 +128,15 @@ type ModelOption = {
   model?: string
   name: string
   desc: string
-  logo: string | null
 }
 
 const MODELS: ModelOption[] = [
-  { id: 'openai', provider: 'openai', name: 'OpenAI', desc: 'GPT models via official API', logo: openaiLogo },
-  { id: 'anthropic', provider: 'anthropic', name: 'Anthropic', desc: 'Claude models via official API', logo: claudeLogo },
-  { id: 'gemini', provider: 'gemini', name: 'Gemini', desc: 'Google Gemini via official API', logo: geminiLogo },
-  {
-    id: 'openrouter',
-    provider: 'openrouter',
-    name: 'OpenRouter',
-    desc: 'Any model, routed through OpenRouter',
-    logo: openRouterLogo
-  },
-  {
-    id: 'local',
-    provider: 'local',
-    name: 'Local model',
-    desc: 'Ollama, LM Studio, vLLM, or another local server',
-    logo: null
-  }
+  { id: 'openai', provider: 'openai', name: 'OpenAI', desc: 'GPT models via official API' },
+  { id: 'anthropic', provider: 'anthropic', name: 'Anthropic', desc: 'Claude models via official API' },
+  { id: 'gemini', provider: 'gemini', name: 'Gemini', desc: 'Google Gemini via official API' },
+  { id: 'openrouter', provider: 'openrouter', name: 'OpenRouter', desc: 'Any model, routed through OpenRouter' },
+  { id: 'local', provider: 'local', name: 'Local model', desc: 'Ollama, LM Studio, vLLM, or another local server' }
 ]
-
-// Match model IDs returned by local servers (for example `qwen2.5:7b`,
-// `mistralai/Mistral-7B-Instruct`, or `TheBloke/deepseek-coder`). Every
-// distinct model/provider family in public/logos has a corresponding rule.
-const logo = (file: string): string => `${import.meta.env.BASE_URL}logos/${file}`
-
-const LOCAL_MODEL_LOGOS: [RegExp, string][] = [
-  [/\bamp\b/i, logo('amp-logo.svg')],
-  [/anthropic/i, logo('anthropic.svg')],
-  [/antigravity/i, logo('antigravity.svg')],
-  [/claude(?:code)?/i, logo('claude.svg')],
-  [/cursor/i, logo('cursor.svg')],
-  [/deepseek/i, logo('deepseek.svg')],
-  [/factory/i, logo('factory.png')],
-  [/gemini/i, logo('gemini.svg')],
-  [/gemma/i, logo('gemma.png')],
-  [/github/i, logo('github.svg')],
-  [/google/i, logo('google.svg')],
-  [/hermes/i, logo('hermes.png')],
-  [/huggingface|hugging/i, logo('huggingface.svg')],
-  [/kilo/i, logo('kilo.png')],
-  [/kimi|moonshot/i, logo('kimi.png')],
-  [/maincode/i, logo('maincode.png')],
-  [/llama|meta-/i, logo('meta.svg')],
-  [/mistral|mixtral/i, logo('mistral.svg')],
-  [/openclaw/i, logo('openclaw.jpeg')],
-  [/opencode/i, logo('opencode.svg')],
-  [/perplexity|sonar/i, logo('perplexity.svg')],
-  [/qwen/i, logo('qwen.svg')],
-  [/gpt|openai/i, logo('openai.svg')],
-  [/grok|xai/i, logo('xai.svg')]
-]
-
-function localModelLogo(model: string, runtime: string): string | null {
-  return (
-    LOCAL_MODEL_LOGOS.find(([pattern]) => pattern.test(model))?.[1] ||
-    (runtime === 'ollama' ? logo('ollama.svg') : null)
-  )
-}
 
 function localModelOption(model: string, runtime: string = 'local'): ModelOption {
   const runtimeName =
@@ -182,38 +152,9 @@ function localModelOption(model: string, runtime: string = 'local'): ModelOption
     provider: 'local',
     model,
     name: model,
-    desc: `${runtimeName} local model`,
-    logo: localModelLogo(model, runtime)
+    desc: `${runtimeName} local model`
   }
 }
-
-/** Providers without a bundled logo image (OpenRouter, Local) fall back to a
- * simple initials badge instead of an <img>. */
-function ProviderLogo({
-  name,
-  logo,
-  className
-}: {
-  id: string
-  name: string
-  logo: string | null
-  className: string
-}): React.JSX.Element {
-  if (logo) return <img src={logo} alt="" className={cn('object-contain', className)} />
-  return (
-    <div
-      className={cn(
-        'rounded-md bg-[#EAE8E3] dark:bg-[#2C2C2A] text-[#6E6D6A] dark:text-[#9E9D9A] flex items-center justify-center font-semibold text-[9px] shrink-0',
-        className
-      )}
-      title={name}
-    >
-      {name.substring(0, 2).toUpperCase()}
-    </div>
-  )
-}
-
-const THINKING_VERBS = ['Thinking', 'Reasoning', 'Composing', 'Considering', 'Drafting']
 
 /** Collapsible reasoning-trace panel, shown above the reply when a provider
  * supplies one. No adapter populates `thinking` yet -- this stays inert
@@ -304,20 +245,31 @@ function AttachmentBlocks({
  * duplicating it: this is the process, the pins are the citations. */
 function SearchTrace({
   tool,
-  sources
+  sources,
+  queries,
+  researchPlan
 }: {
   tool?: string
-  sources?: { title: string; url: string }[]
+  sources?: Message['sources']
+  queries?: string[]
+  researchPlan?: Message['researchPlan']
 }): React.JSX.Element | null {
-  if ((tool !== 'searchWeb' && tool !== 'deepResearch') || !sources || sources.length === 0) {
+  if ((tool !== 'searchWeb' && tool !== 'deepResearch' && tool !== 'safeTools') ||
+      ((!sources || sources.length === 0) && (!queries || queries.length === 0))) {
     return null
   }
+  const sourceList = sources || []
 
   return (
     <Task defaultOpen={false}>
-      <TaskTrigger title={tool === 'deepResearch' ? 'Researched the web' : 'Searched the web'} />
+      <TaskTrigger title={tool === 'deepResearch'
+        ? `Research · ${queries?.length || 0} queries · ${sourceList.filter((s) => s.fetched).length} pages read`
+        : `Searched the web · ${sourceList.length} sources`} />
       <TaskContent>
-        {sources.map((s, i) => (
+        {researchPlan && <p className="mb-2 text-xs font-medium">{researchPlan.objective}</p>}
+        {researchPlan?.freshness && <p className="mb-2 text-[10px] text-muted-foreground">Freshness: {researchPlan.freshness}</p>}
+        {queries?.length ? <ul className="mb-2 list-disc pl-4 text-xs">{queries.map((query) => <li key={query}>{query}</li>)}</ul> : null}
+        {sourceList.map((s, i) => (
           <TaskItem key={i}>
             <a
               href={s.url}
@@ -325,7 +277,7 @@ function SearchTrace({
               rel="noreferrer"
               className="hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3] hover:underline"
             >
-              {s.title || s.url}
+              {s.source_id ? `[${s.source_id}] ` : ''}{s.title || s.url}{s.published_date ? ` · ${s.published_date}` : ''}{s.fetched ? ' · read' : ''}
             </a>
           </TaskItem>
         ))}
@@ -336,36 +288,32 @@ function SearchTrace({
 
 /** Collapsible "Used N sources" list for a Search-web/Research-mode reply's
  * citations, shown below the response text. */
-function SourcePins({
-  sources
-}: {
-  sources?: { title: string; url: string }[]
-}): React.JSX.Element | null {
+function SourcePins({ sources }: { sources?: Message['sources'] }): React.JSX.Element | null {
   if (!sources || sources.length === 0) return null
 
   return (
     <Sources>
       <SourcesTrigger count={sources.length} />
       <SourcesContent>
-        {sources.map((s, i) => (
-          <Source key={i} href={s.url} title={s.title || s.url} />
-        ))}
+        <div className="space-y-2">
+          {sources.map((source, index) => (
+            <article key={source.source_id || index} className="rounded-lg border border-border p-3">
+              <a href={source.url} target="_blank" rel="noreferrer"
+                className="text-sm font-medium hover:underline">
+                {source.source_id ? `[${source.source_id}] ` : ''}{source.title || source.url}
+              </a>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                {source.host || source.url}
+                {source.published_date ? ` · ${source.published_date}` : ''}
+                {source.fetched ? ' · page read' : ''}
+              </p>
+              {source.snippet && <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">{source.snippet}</p>}
+            </article>
+          ))}
+        </div>
       </SourcesContent>
     </Sources>
   )
-}
-
-function ThinkingIndicator(): React.JSX.Element {
-  const [verbIndex, setVerbIndex] = useState(0)
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      setVerbIndex((i) => (i + 1) % THINKING_VERBS.length)
-    }, 1600)
-    return () => clearInterval(id)
-  }, [])
-
-  return <span className="shimmer-text text-sm font-medium">{THINKING_VERBS[verbIndex]}...</span>
 }
 
 /** Reveals `text` a few characters at a time when `animate` is true (skipped
@@ -439,6 +387,8 @@ export default function ChatArea({
   isSidebarCollapsed,
   setIsSidebarCollapsed,
   activeChat,
+  composerPreference,
+  onComposerChange,
   onSendMessage,
   onNewChat,
   onTogglePin,
@@ -446,10 +396,14 @@ export default function ChatArea({
   onStopSending
 }: ChatAreaProps): React.JSX.Element {
   const [selectedModel, setSelectedModel] = useState('openai')
+  const [preferredModel, setPreferredModel] = useState(false)
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
+  const [modelFilter, setModelFilter] = useState('')
   const [isExportingPdf, setIsExportingPdf] = useState(false)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [providerSettings, setProviderSettings] = useState<ProviderSettingsMap>({})
+  const [providerLoadError, setProviderLoadError] = useState('')
+  const [toolModels, setToolModels] = useState<Record<string, string[]>>({})
   const [localModels, setLocalModels] = useState<string[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -460,11 +414,19 @@ export default function ChatArea({
   useEffect(() => {
     const refresh = (): void => {
       getProviderSettings()
-        .then(setProviderSettings)
-        .catch(() => {})
+        .then((settings) => {
+          setProviderSettings(settings)
+          setProviderLoadError('')
+        })
+        .catch((err) => setProviderLoadError(friendlyErrorMessage(err, 'Local API unavailable.')))
       getLocalModels()
         .then((result) => setLocalModels(result.models))
         .catch(() => setLocalModels([]))
+      getProviders()
+        .then((items) => setToolModels(Object.fromEntries(
+          items.map((item) => [item.provider, item.capabilities?.tool_models || []])
+        )))
+        .catch(() => setToolModels({}))
     }
     refresh()
     window.addEventListener('providers:updated', refresh)
@@ -507,6 +469,7 @@ export default function ChatArea({
   const currentChatId = activeChat?.id ?? null
   if (currentChatId !== syncedChatId) {
     setSyncedChatId(currentChatId)
+    setPreferredModel(false)
     if (activeChat?.provider) {
       setSelectedModel(
         activeChat.provider === 'local' && activeChat.model ? `local:${activeChat.model}` : activeChat.provider
@@ -522,6 +485,7 @@ export default function ChatArea({
     if (activeModels.length === 0) return
     if (activeModels.some((m) => m.id === selectedModel)) return
     setSelectedModel(activeModels[0].id)
+    setPreferredModel(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeModels, activeChat?.provider])
 
@@ -535,13 +499,29 @@ export default function ChatArea({
   const handlePromptSubmit = (
     text: string,
     selectedTool: string | null,
-    attachments: Attachment[]
+    attachments: Attachment[],
+    mode: ExecutionMode,
+    draftKind: DraftKind
   ): void => {
-    onSendMessage(text, selectedTool, selectedModelObj.provider, selectedModelObj.model || null, attachments)
+    onSendMessage(
+      text,
+      selectedTool,
+      selectedModelObj.provider,
+      selectedModelObj.model || null,
+      attachments,
+      mode,
+      draftKind,
+      preferredModel || (activeChat?.provider === selectedModelObj.provider && selectedModelObj.provider !== 'local')
+    )
   }
 
   // Custom typography parser for markdown-like formatting
-  const parseMarkdownContent = (text: string, isStreaming = false): React.ReactNode[] => {
+  const parseMarkdownContent = (
+    text: string,
+    isStreaming = false,
+    sources?: Message['sources'],
+    attachmentSources?: Message['attachmentSources']
+  ): React.ReactNode[] => {
     const lines = text.split('\n')
     let inCodeBlock = false
     let codeBlockLang = ''
@@ -625,8 +605,8 @@ export default function ChatArea({
       const parts: React.ReactNode[] = []
       let lastIndex = 0
 
-      // Match bold (**text**) or code (`code`)
-      const regex = /(\*\*([^*]+)\*\*|`([^`]+)`)/g
+      // Match bold, code, or a server-issued source citation.
+      const regex = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([SA]\d+)\])/g
       let match
 
       let index = 0
@@ -645,7 +625,6 @@ export default function ChatArea({
             </strong>
           )
         } else if (fullMatch.startsWith('`')) {
-          // Code inline
           parts.push(
             <code
               key={index++}
@@ -654,6 +633,14 @@ export default function ChatArea({
               {match[3]}
             </code>
           )
+        } else {
+          const source = sources?.find((s) => s.source_id === match[4])
+          const attachment = attachmentSources?.find((s) => s.source_id === match[4])
+          parts.push(source ? (
+            <a key={index++} href={source.url} target="_blank" rel="noreferrer" className="text-blue-600 underline" title={source.title}>
+              {fullMatch}
+            </a>
+          ) : attachment ? <span key={index++} title={`${attachment.filename}, ${attachment.section}`}>{fullMatch}</span> : fullMatch)
         }
         lastIndex = regex.lastIndex
       }
@@ -749,8 +736,9 @@ export default function ChatArea({
         // fall through -- this line still needs its own normal handling
       }
 
-      // Check for headings
-      if (line.startsWith('# ')) {
+      // Markdown permits up to three spaces before an ATX heading.
+      const headingLine = /^ {0,3}#/.test(line) ? line.trimStart() : line
+      if (headingLine.startsWith('# ')) {
         const listNode = renderList(`list-${index}`)
         if (listNode) renderedNodes.push(listNode)
         renderedNodes.push(
@@ -758,12 +746,12 @@ export default function ChatArea({
             key={`h1-${index}`}
             className="text-lg font-semibold tracking-tight text-[#1A1A19] dark:text-[#EAE8E3] mt-6 mb-2"
           >
-            {parseInlineStyles(line.substring(2))}
+            {parseInlineStyles(headingLine.substring(2))}
           </h1>
         )
         return
       }
-      if (line.startsWith('## ')) {
+      if (headingLine.startsWith('## ')) {
         const listNode = renderList(`list-${index}`)
         if (listNode) renderedNodes.push(listNode)
         renderedNodes.push(
@@ -771,21 +759,34 @@ export default function ChatArea({
             key={`h2-${index}`}
             className="text-base font-semibold tracking-tight text-[#1A1A19] dark:text-[#EAE8E3] mt-5 mb-2"
           >
-            {parseInlineStyles(line.substring(3))}
+            {parseInlineStyles(headingLine.substring(3))}
           </h2>
         )
         return
       }
-      if (line.startsWith('### ')) {
+      if (headingLine.startsWith('### ')) {
         const listNode = renderList(`list-${index}`)
         if (listNode) renderedNodes.push(listNode)
         renderedNodes.push(
           <h3
             key={`h3-${index}`}
-            className="text-sm font-semibold tracking-tight text-[#1A1A19] dark:text-[#EAE8E3] mt-4 mb-1.5"
+            className="text-[15px] font-semibold tracking-tight text-[#1A1A19] dark:text-[#EAE8E3] mt-4 mb-1.5"
           >
-            {parseInlineStyles(line.substring(4))}
+            {parseInlineStyles(headingLine.substring(4))}
           </h3>
+        )
+        return
+      }
+      const deeperHeading = /^(#{4,6}) (.+)$/.exec(headingLine)
+      if (deeperHeading) {
+        const Tag = `h${deeperHeading[1].length}` as 'h4' | 'h5' | 'h6'
+        const listNode = renderList(`list-${index}`)
+        if (listNode) renderedNodes.push(listNode)
+        renderedNodes.push(
+          <Tag key={`h${deeperHeading[1].length}-${index}`}
+            className="mt-3 mb-1.5 text-sm font-semibold text-[#1A1A19] dark:text-[#EAE8E3]">
+            {parseInlineStyles(deeperHeading[2])}
+          </Tag>
         )
         return
       }
@@ -859,10 +860,23 @@ export default function ChatArea({
           animate={!!message.isNew}
           isStreaming={isStreaming}
           onDone={() => onMessageRevealed(message.id)}
-          render={(text) => parseMarkdownContent(text, isStreaming)}
+          render={(text) => parseMarkdownContent(text, isStreaming, message.sources, message.attachmentSources)}
         />
       </div>
-      <SourcePins sources={message.sources} />
+      {message.attachmentSources?.length ? (
+        <div className="my-2 text-xs text-muted-foreground">
+          Attached-file evidence: {message.attachmentSources.map((item) =>
+            `${item.source_id} ${item.filename} (${item.section})`
+          ).join(' · ')}
+        </div>
+      ) : null}
+      <SourcePins sources={message.sources?.filter((source) =>
+        !source.source_id || message.content.includes(`[${source.source_id}]`)
+      )} />
+      {message.draft && <DocumentDraftReview draft={message.draft} content={message.content} />}
+      {message.runStatus === 'partial' && (
+        <p className="text-xs text-amber-700 dark:text-amber-300">Partial research: {message.runPhase || 'some evidence was unavailable'}</p>
+      )}
       <MemoryUsed memory={message.memory} />
       <div className="mt-1.5 flex items-center justify-between">
         <span className="text-[10px] text-[#9E9D9A] dark:text-[#6E6D6A]">
@@ -879,16 +893,85 @@ export default function ChatArea({
     </>
   )
 
-  const selectedModelObj = activeModels.find((m) => m.id === effectiveModel) || MODELS[0]
-  const optionForMessage = (provider?: string, model?: string): ModelOption | undefined => {
-    if (provider === 'local') {
-      return (
-        activeModels.find((option) => option.provider === provider && option.model === model) ||
-        localModelOption(model || providerSettings.local?.model || 'Local model', providerSettings.local?.runtime)
-      )
-    }
-    return MODELS.find((option) => option.provider === provider)
+  const selectedModelObj = activeModels.find((m) => m.id === effectiveModel) || activeModels[0] || MODELS[0]
+  const visibleModels = activeModels.filter((model) =>
+    `${model.name} ${model.desc}`.toLowerCase().includes(modelFilter.trim().toLowerCase())
+  )
+  const modelPicker = (
+    <Popover.Root
+      open={isModelDropdownOpen}
+      onOpenChange={(open) => {
+        setIsModelDropdownOpen(open)
+        if (!open) setModelFilter('')
+      }}
+    >
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          aria-label={`Model: ${activeModels.length ? selectedModelObj.name : 'Choose model'}`}
+          title="Switch model for the next message"
+          className="flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-full border border-[#E5E3DF] px-2.5 text-xs font-medium text-[#2E2E2D] hover:bg-[#F1EFEA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:border-[#4d4d4d] dark:text-[#EAE8E3] dark:hover:bg-[#2C2C2A]"
+        >
+          {activeModels.length > 0 && (selectedModelObj.provider === 'local' ? <Cpu size={14} aria-hidden="true" /> : <Cloud size={14} aria-hidden="true" />)}
+          <span className="truncate">{activeModels.length ? selectedModelObj.name : 'Choose model'}</span>
+          <ChevronDown size={12} aria-hidden="true" />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          side="top"
+          align="end"
+          sideOffset={8}
+          aria-label="Choose model"
+          className="z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-[#E5E3DF] bg-[#FAF9F6] p-2 text-[#2E2E2D] shadow-md outline-none dark:border-[#2C2C2A] dark:bg-[#252523] dark:text-[#EAE8E3] motion-safe:animate-in motion-safe:fade-in"
+        >
+          <p className="px-2 pb-2 text-xs font-medium text-[#6E6D6A] dark:text-[#9E9D9A]">Model</p>
+          <div className="flex items-center gap-2 rounded-lg border border-[#E5E3DF] px-2 dark:border-[#4d4d4d]">
+            <Search size={15} className="shrink-0 text-[#6E6D6A]" aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="Filter models"
+              placeholder="Filter models"
+              value={modelFilter}
+              onChange={(event) => setModelFilter(event.target.value)}
+              className="min-w-0 w-full bg-transparent py-2 text-sm outline-none"
+            />
+          </div>
+          <div className="mt-1 max-h-64 overflow-y-auto">
+            {visibleModels.length > 0 ? visibleModels.map((model) => (
+              <button
+                key={model.id}
+                type="button"
+                aria-label={model.name}
+                aria-pressed={selectedModel === model.id}
+                onClick={() => {
+                  setSelectedModel(model.id)
+                  setPreferredModel(true)
+                  setIsModelDropdownOpen(false)
+                  setModelFilter('')
+                }}
+                className="flex w-full items-center gap-2 rounded-lg p-2 text-left text-sm hover:bg-[#F1EFEA] focus-visible:outline-2 focus-visible:outline-ring dark:hover:bg-[#2C2C2A]"
+              >
+                {model.provider === 'local' ? <Cpu size={16} aria-hidden="true" /> : <Cloud size={16} aria-hidden="true" />}
+                <span className="min-w-0 flex-1 truncate">{model.name}</span>
+                {selectedModel === model.id && <Check size={14} aria-hidden="true" />}
+              </button>
+            )) : (
+              <p className="p-2 text-xs text-[#6E6D6A] dark:text-[#9E9D9A]">
+                {activeModels.length === 0 ? 'No providers connected — add one in Profile > Advanced.' : 'No matching models.'}
+              </p>
+            )}
+          </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  )
+  const providerDefaults: Record<string, string> = {
+    openai: 'gpt-4o', anthropic: 'claude-sonnet-4-5', gemini: 'gemini-2.5-flash'
   }
+  const toolCallsAvailable = (toolModels[selectedModelObj.provider] || []).includes(
+    selectedModelObj.model || providerDefaults[selectedModelObj.provider] || ''
+  )
 
   return (
     <main className="flex-1 h-full flex flex-col bg-[#FAF9F6] dark:bg-[#171717] relative overflow-hidden">
@@ -905,69 +988,6 @@ export default function ChatArea({
             </button>
           )}
 
-          {/* Model Selector Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
-              title="Switch model for the next message"
-              className="h-8 px-2 rounded-lg text-sm font-semibold text-[#2E2E2D] dark:text-[#EAE8E3] transition-colors flex items-center gap-1.5 font-sans hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] cursor-pointer"
-            >
-              <ProviderLogo
-                id={selectedModelObj.id}
-                name={selectedModelObj.name}
-                logo={selectedModelObj.logo}
-                className="rounded-sm w-6 h-6"
-              />
-              <span>{selectedModelObj.name}</span>
-              <HugeiconsIcon
-                icon={ArrowDown}
-                size={12}
-                className="text-[#6E6D6A] dark:text-[#9E9D9A]"
-              />
-            </button>
-
-            {isModelDropdownOpen && (
-              <>
-                <div className="fixed inset-0 z-20" onClick={() => setIsModelDropdownOpen(false)} />
-                <div className="absolute left-0 mt-1.5 w-60 rounded-xl border border-[#E5E3DF] dark:border-[#2C2C2A] bg-[#FAF9F6] dark:bg-[#252523] shadow-md p-1.5 z-30 animate-in fade-in slide-in-from-top-1 duration-150">
-                  {activeModels.length === 0 ? (
-                    <p className="p-2 text-xs text-[#6E6D6A] dark:text-[#9E9D9A] leading-relaxed">
-                      No providers connected yet -- add an API key under Profile &gt; Advanced.
-                    </p>
-                  ) : (
-                    activeModels.map((model) => (
-                      <button
-                        key={model.id}
-                        onClick={() => {
-                          setSelectedModel(model.id)
-                          setIsModelDropdownOpen(false)
-                        }}
-                        className={cn(
-                          'w-full text-left p-2 rounded-lg transition-colors cursor-pointer flex items-center gap-2',
-                          selectedModel === model.id
-                            ? 'bg-[#EAE8E3] dark:bg-[#2C2C2A] text-[#2E2E2D] dark:text-[#EAE8E3]'
-                            : 'hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] text-[#6E6D6A] dark:text-[#9E9D9A] hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3]'
-                        )}
-                      >
-                        <ProviderLogo
-                          id={model.id}
-                          name={model.name}
-                          logo={model.logo}
-                          className="rounded-md shrink-0 w-6 h-6"
-                        />
-                        <div className="flex flex-col gap-0.5">
-                          <span className="text-sm font-semibold">{model.name}</span>
-                          <span className="text-[10px] opacity-80 leading-normal">
-                            {model.desc}
-                          </span>
-                        </div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </>
-            )}
-          </div>
         </div>
 
         {/* Centered Conversation Title */}
@@ -1023,6 +1043,11 @@ export default function ChatArea({
           </button>
         </div>
       </header>
+      {providerLoadError && (
+        <p role="alert" className="px-4 py-2 text-xs text-red-600">
+          {providerLoadError}
+        </p>
+      )}
 
       {/* Main Messaging Area */}
       <div
@@ -1044,7 +1069,16 @@ export default function ChatArea({
 
               {/* Render centered PromptBox when chat has no messages */}
               <div className="w-full max-w-3xl">
-                <PromptBox onSubmitPrompt={handlePromptSubmit} />
+                <PromptBox
+                  onSubmitPrompt={handlePromptSubmit}
+                  modelPicker={modelPicker}
+                  canSend={activeModels.length > 0}
+                  toolCallsAvailable={toolCallsAvailable}
+                  intent={composerPreference?.intent}
+                  draftKind={composerPreference?.draftKind}
+                  onIntentChange={(intent: ChatIntent) => onComposerChange?.({ intent })}
+                  onDraftKindChange={(draftKind) => onComposerChange?.({ draftKind })}
+                />
               </div>
 
               {/* Grid of Starters
@@ -1091,7 +1125,6 @@ export default function ChatArea({
                 return (
                   <>
                     {activeChat.messages.map((message) => {
-                      const respondingModel = optionForMessage(message.provider, message.model)
                       const isStreamingMessage =
                         !!activeChat.isSending &&
                         message.sender === 'assistant' &&
@@ -1112,21 +1145,8 @@ export default function ChatArea({
                           )}
                         >
                           {message.sender === 'assistant' && (
-                            <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 select-none overflow-hidden">
-                              {respondingModel ? (
-                                <ProviderLogo
-                                  id={respondingModel.id}
-                                  name={respondingModel.name}
-                                  logo={respondingModel.logo}
-                                  className="w-6 h-6"
-                                />
-                              ) : (
-                                <HugeiconsIcon
-                                  icon={Message01Icon}
-                                  size={16}
-                                  className="text-[#6E6D6A] dark:text-[#9E9D9A]"
-                                />
-                              )}
+                            <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 select-none">
+                              <HugeiconsIcon icon={Message01Icon} size={16} className="text-[#6E6D6A] dark:text-[#9E9D9A]" />
                             </div>
                           )}
 
@@ -1164,7 +1184,11 @@ export default function ChatArea({
                             ) : (
                               <>
                                 <AttachmentBlocks attachments={message.attachments} />
-                                <SearchTrace tool={message.tool} sources={message.sources} />
+                                {message.routeReason && (
+                                  <p className="mb-2 text-xs text-muted-foreground">Auto route: {message.routeReason}</p>
+                                )}
+                                <SearchTrace tool={message.tool} sources={message.sources}
+                                  queries={message.queries} researchPlan={message.researchPlan} />
                                 <ThinkingBlock thinking={message.thinking} />
                                 {renderReplyBody(message, isStreamingMessage)}
                               </>
@@ -1186,32 +1210,18 @@ export default function ChatArea({
 
                     {showPendingIndicator && (
                       <div className="flex gap-3.5 md:gap-5 pb-4 justify-start">
-                        <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 select-none overflow-hidden">
-                          {(() => {
-                            const pendingModel = optionForMessage(activeChat.provider || undefined, activeChat.model || undefined)
-                            return pendingModel ? (
-                              <ProviderLogo
-                                id={pendingModel.id}
-                                name={pendingModel.name}
-                                logo={pendingModel.logo}
-                                className="w-6 h-6"
-                              />
-                            ) : (
-                              <HugeiconsIcon
-                                icon={Message01Icon}
-                                size={16}
-                                className="text-[#6E6D6A] dark:text-[#9E9D9A]"
-                              />
-                            )
-                          })()}
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 select-none">
+                          <HugeiconsIcon icon={Message01Icon} size={16} className="text-[#6E6D6A] dark:text-[#9E9D9A]" />
                         </div>
                         <div className="flex-1 flex items-center py-2">
                           {activeChat.isGeneratingImage ? (
                             <div className="w-full max-w-56 aspect-[4/3] rounded-xl bg-[#EAE8E3] dark:bg-[#2C2C2A] overflow-hidden relative">
                               <div className="skeleton-shimmer absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/40 dark:via-white/10 to-transparent" />
                             </div>
+                          ) : lastMessage?.runPhase ? (
+                            <span className="text-sm text-muted-foreground">{lastMessage.runPhase}</span>
                           ) : (
-                            <ThinkingIndicator />
+                            <LoadingState key={activeChat.id} />
                           )}
                         </div>
                       </div>
@@ -1242,7 +1252,14 @@ export default function ChatArea({
           <div className="max-w-3xl mx-auto">
             <PromptBox
               onSubmitPrompt={handlePromptSubmit}
+              modelPicker={modelPicker}
+              canSend={activeModels.length > 0}
               isBusy={activeChat.isSending}
+              toolCallsAvailable={toolCallsAvailable}
+              intent={composerPreference?.intent}
+              draftKind={composerPreference?.draftKind}
+              onIntentChange={(intent: ChatIntent) => onComposerChange?.({ intent })}
+              onDraftKindChange={(draftKind) => onComposerChange?.({ draftKind })}
               onStop={() => onStopSending(activeChat.id)}
             />
           </div>

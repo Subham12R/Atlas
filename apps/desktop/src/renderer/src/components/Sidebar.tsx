@@ -581,12 +581,10 @@ export default function Sidebar({
               <HugeiconsIcon icon={Cancel01Icon} size={11} />
             </button>
           </div>
-          <h4 className="text-sm font-bold text-[#2E2E2D] dark:text-[#EAE8E3]">
-            Deep Research Nodes
-          </h4>
+          <h4 className="text-sm font-bold text-[#2E2E2D] dark:text-[#EAE8E3]">Web research</h4>
           <p className="text-[12px] text-[#6E6D6A] dark:text-[#9E9D9A] leading-relaxed">
-            Compile files directly from web research pages into active project workspaces. Try
-            selecting it in Tools!
+            Research plans up to 3 web queries and reads up to 3 public pages. Results can be
+            incomplete; workspace nodes and report collections are not implemented.
           </p>
         </div>
       )}

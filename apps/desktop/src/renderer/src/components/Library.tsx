@@ -9,6 +9,7 @@ import {
 } from '@hugeicons/core-free-icons'
 import { cn } from '@/lib/utils'
 import type { Chat } from './ChatArea'
+import DocumentLibrary from './DocumentLibrary'
 
 interface LibraryProps {
   chats: Chat[]
@@ -82,6 +83,7 @@ export default function Library({
 
       {/* Scrollable row list */}
       <div className="flex-1 overflow-y-auto no-scrollbar px-6 md:px-10 pb-6">
+        <DocumentLibrary />
         <div className="max-w-3xl mx-auto space-y-0.5">
           {filteredChats.length === 0 && (
             <div className="flex flex-col items-center justify-center py-20 text-[#9E9D9A] dark:text-[#6E6D6A] select-none">

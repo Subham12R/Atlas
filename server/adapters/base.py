@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 @dataclass
@@ -26,8 +27,69 @@ class ImageInput:
     mime: str
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: str  # Raw JSON, bounded and schema-validated by the runner.
+
+    def __post_init__(self):
+        if (not isinstance(self.id, str) or not self.id or len(self.id) > 200 or
+                not isinstance(self.name, str) or not self.name or len(self.name) > 100 or
+                not isinstance(self.arguments, str) or len(self.arguments) > 8192):
+            raise ValueError('invalid or oversized provider tool call')
+
+
+@dataclass(frozen=True)
+class TurnMessage:
+    role: Literal['system', 'user', 'assistant', 'tool', 'evidence']
+    content: str = ''
+    images: list[ImageInput] | None = None
+    tool_call_id: str | None = None
+    calls: tuple[ToolCall, ...] = ()
+
+
+@dataclass(frozen=True)
+class AdapterTurn:
+    text: str
+    calls: tuple[ToolCall, ...] = ()
+    stop_reason: str = 'stop'
+
+
+@dataclass(frozen=True)
+class AdapterEvent:
+    kind: Literal['text.delta', 'tool.call', 'turn.final']
+    text: str = ''
+    call: ToolCall | None = None
+    stop_reason: str = ''
+
+
+@dataclass(frozen=True)
+class AdapterCapabilities:
+    tool_calls: bool = False
+    streamed_arguments: bool = False
+    supported_models: tuple[str, ...] = ()
+
+
 class BaseAdapter(ABC):
     name: str = "base"
+    capabilities = AdapterCapabilities()
+
+    async def run_turn(self, messages: list[TurnMessage], tools: list[dict]) -> AdapterTurn:
+        """Provider-native calls when supported; never execute a tool here."""
+        if tools:
+            raise NotImplementedError('model tool calls unsupported by this adapter')
+        reply = await self.send(messages[-1].content)
+        return AdapterTurn(text=reply.text)
+
+    async def stream_turn(self, messages: list[TurnMessage], tools: list[dict]):
+        """Normalize a complete turn for adapters without native streaming."""
+        turn = await self.run_turn(messages, tools)
+        if turn.text:
+            yield AdapterEvent(kind='text.delta', text=turn.text)
+        for call in turn.calls:
+            yield AdapterEvent(kind='tool.call', call=call)
+        yield AdapterEvent(kind='turn.final', stop_reason=turn.stop_reason)
 
     @abstractmethod
     async def init(self) -> None:

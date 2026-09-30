@@ -1,6 +1,8 @@
 import React, { useLayoutEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import { cn } from '@/lib/utils'
+import { GradientWaveText } from '@/components/gradient-wave-text'
+import { RichButton } from '@/components/rich-button'
 
 interface OnboardingProps {
   onComplete: (name: string, avatarDataUrl: string | null) => void
@@ -22,11 +24,13 @@ function ContinueButton({
   label: string
 }): React.JSX.Element {
   return (
-    <button
+    <RichButton
+      type="button"
       onClick={onClick}
       disabled={disabled}
+      aria-label={label}
       title={label}
-      className="w-12 h-12 shrink-0 rounded-full bg-[#2E2E2D] dark:bg-white flex items-center justify-center text-white dark:text-black hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+      className="size-12 shrink-0 rounded-full p-0"
     >
       {busy ? (
         <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
@@ -56,7 +60,7 @@ function ContinueButton({
           <path d="M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )}
-    </button>
+    </RichButton>
   )
 }
 
@@ -65,6 +69,9 @@ function ContinueButton({
  * from Settings, not during onboarding. */
 export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.Element {
   const [step, setStep] = useState(1)
+  const [reduceMotion, setReduceMotion] = useState(
+    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  )
   const [name, setName] = useState('')
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null)
   const [email, setEmail] = useState('')
@@ -76,6 +83,13 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
   const fileInputRef = useRef<HTMLInputElement>(null)
   const sceneRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const update = (): void => setReduceMotion(media.matches)
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
 
   // Staggered reveal per step. Reset the scene container first — transitionOut
   // fades the whole scene to opacity 0 and that inline style persists otherwise.
@@ -90,6 +104,10 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
     if (lines.length === 0) return
 
     gsap.killTweensOf(lines)
+    if (reduceMotion) {
+      gsap.set(lines, { opacity: 1, y: 0 })
+      return
+    }
     gsap.set(lines, { opacity: 0, y: 34 })
     gsap.to(lines, {
       opacity: 1,
@@ -98,7 +116,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
       ease: 'power3.out',
       stagger: 0.18
     })
-  }, [step])
+  }, [step, reduceMotion])
 
   const handleAvatarClick = (): void => {
     fileInputRef.current?.click()
@@ -121,7 +139,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
     const scene = sceneRef.current
     if (!scene) return Promise.resolve()
     const lines = scene.querySelectorAll('[data-gsap-line]')
-    if (lines.length === 0) return Promise.resolve()
+    if (lines.length === 0 || reduceMotion) return Promise.resolve()
     return new Promise((resolve) => {
       gsap.to(lines, {
         opacity: 0,
@@ -209,23 +227,30 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
       ref={overlayRef}
       className={cn(
         'absolute inset-0 flex flex-col select-none overflow-hidden',
-        'bg-[#FAF9F6] dark:bg-[#171717]',
+        step === 1 ? 'bg-transparent' : 'bg-[#FAF9F6] dark:bg-[#171717]',
         isExiting && 'pointer-events-none'
       )}
     >
-      {/* Bottom radial glow — fades to transparent over the titlebar-matched base */}
-      <div
-        className="pointer-events-none absolute inset-0"
-        aria-hidden
-        style={{
-          background:
-            'radial-gradient(ellipse 100% 140% at 50% 100%, rgba(186, 230, 253, 0.6) 0%, rgba(56, 189, 248, 0.4) 10%, rgba(14, 165, 233, 0.2) 28%, transparent 44%)'
-        }}
-      />
+      {/* Keep the intro clear; the existing ambient glow belongs to account creation. */}
+      {step > 1 && (
+        <div
+          className="pointer-events-none absolute inset-0"
+          aria-hidden
+          style={{
+            background:
+              'radial-gradient(ellipse 100% 140% at 50% 100%, rgba(186, 230, 253, 0.6) 0%, rgba(56, 189, 248, 0.4) 10%, rgba(14, 165, 233, 0.2) 28%, transparent 44%)'
+          }}
+        />
+      )}
 
       <div className="relative z-10 flex flex-col flex-1 min-h-0">
       {/* Progress -- minimal dots, top center */}
-      <div className="flex items-center gap-1.5 justify-center pt-10 shrink-0">
+      <div
+        className={cn(
+          'flex items-center gap-1.5 justify-center pt-16 shrink-0',
+          step === 1 && 'invisible'
+        )}
+      >
         {Array.from({ length: TOTAL_STEPS }, (_, i) => i + 1).map((s) => (
           <div
             key={s}
@@ -250,16 +275,17 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
           <>
             <h1
               data-gsap-line
-              className="text-4xl md:text-8xl font-sans font-medium tracking-tighter text-[#2E2E2D] dark:text-white"
+              className="w-full font-sans text-[clamp(5rem,17vw,15rem)] font-medium tracking-[-0.08em] leading-none"
             >
-              Welcome to Atlas.
+              <GradientWaveText paused={reduceMotion} ariaLabel="Atlas" className="min-h-[1.2em]">
+                Atlas
+              </GradientWaveText>
             </h1>
             <p
               data-gsap-line
-              className="font-sans tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 max-w-4xl"
+              className="font-sans tracking-tight text-lg md:text-2xl text-[#6E6D6A] dark:text-white/60 max-w-xl"
             >
-              One platform to work hassle free - Research, Document, Chat, Anything you wanna do..
-              <span className="italic ml-1">No interruptions.</span>
+              Research, create, and think without interruptions.
             </p>
           </>
         )}
@@ -302,7 +328,16 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
 
       {/* Sleek, bottom-docked controls -- mac-lockscreen style */}
       <div className="shrink-0 pb-14 px-6 flex flex-col items-center gap-3">
-        {step === 1 && <ContinueButton onClick={handleNext} label="Begin" />}
+        {step === 1 && (
+          <RichButton
+            type="button"
+            size="lg"
+            className="h-12 rounded-full px-9"
+            onClick={handleNext}
+          >
+            Get started
+          </RichButton>
+        )}
 
         {step === 2 && (
           <div className="w-full max-w-2xl flex flex-col items-center gap-4">
@@ -320,7 +355,11 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
                 className="w-14 h-12 rounded-full bg-black/5 dark:bg-white/10 border border-black/10 dark:border-white/20 flex items-center justify-center overflow-hidden cursor-pointer hover:border-black/25 dark:hover:border-white/40 transition-colors backdrop-blur-sm"
               >
                 {avatarDataUrl ? (
-                  <img src={avatarDataUrl} alt="Avatar" className="w-full h-full object-contain" />
+                  <img
+                    src={avatarDataUrl}
+                    alt="Avatar"
+                    className="w-full h-full object-contain"
+                  />
                 ) : (
                   <svg
                     viewBox="0 0 24 24"
@@ -392,10 +431,11 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
                 {error}
               </p>
             )}
-            <button
+            <RichButton
+              type="button"
               onClick={handleNext}
               disabled={!email.trim() || !password || !confirmPassword || saving}
-              className="w-full h-12 rounded-3xl bg-[#2E2E2D] dark:bg-white flex items-center justify-center gap-2 text-white dark:text-black text-base font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              className="w-full h-12 rounded-full text-base"
             >
               {saving ? (
                 <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
@@ -428,7 +468,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
                   </svg>
                 </>
               )}
-            </button>
+            </RichButton>
           </div>
         )}
 

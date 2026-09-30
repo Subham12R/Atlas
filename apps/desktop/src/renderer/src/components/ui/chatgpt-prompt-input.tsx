@@ -297,12 +297,14 @@ interface PromptBoxProps extends React.TextareaHTMLAttributes<HTMLTextAreaElemen
   onIntentChange?: (intent: ChatIntent) => void
   draftKind?: DraftKind
   onDraftKindChange?: (kind: DraftKind) => void
+  /** Text to insert at the start of the box; a new `id` inserts again. */
+  prefill?: { text: string; id: number }
 }
 
 // --- The Final, Self-Contained PromptBox Component ---
 export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
   ({ className, onSubmitPrompt, isBusy, onStop, modelPicker, canSend = true, toolCallsAvailable = false,
-    imageGenerationAvailable = true, intent: intentProp, onIntentChange, draftKind: draftKindProp, onDraftKindChange, ...props }, ref) => {
+    imageGenerationAvailable = true, intent: intentProp, onIntentChange, draftKind: draftKindProp, onDraftKindChange, prefill, ...props }, ref) => {
     const internalTextareaRef = React.useRef<HTMLTextAreaElement>(null)
     const fileInputRef = React.useRef<HTMLInputElement>(null)
     const pendingTextFiles = React.useRef<File[]>([])
@@ -332,6 +334,21 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
     const baseValueRef = React.useRef('')
 
     React.useImperativeHandle(ref, () => internalTextareaRef.current!, [])
+
+    // Insert (never replace) so a quoted selection keeps what the user typed.
+    const [appliedPrefill, setAppliedPrefill] = React.useState(prefill?.id)
+    if (prefill && prefill.id !== appliedPrefill) {
+      setAppliedPrefill(prefill.id)
+      setValue((current) => prefill.text + current)
+    }
+    const focusedPrefill = React.useRef(prefill?.id)
+    React.useEffect(() => {
+      const textarea = internalTextareaRef.current
+      if (!prefill || !textarea || focusedPrefill.current === prefill.id) return
+      focusedPrefill.current = prefill.id
+      textarea.focus()
+      textarea.setSelectionRange(prefill.text.length, prefill.text.length)
+    }, [prefill])
 
     React.useEffect(() => {
       return () => {
@@ -631,7 +648,7 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
                     {INTENT_OPTIONS.map((option) => (
                       <button key={option.id} type="button" aria-pressed={intent === option.id}
                         disabled={(option.id === 'safeTools' && !toolCallsAvailable) || (option.id === 'generateImage' && !imageGenerationAvailable)}
-                        title={option.id === 'safeTools' && !toolCallsAvailable ? 'Selected model cannot choose tools; use Web search or Research web' : option.id === 'generateImage' && !imageGenerationAvailable ? 'Image generation requires OpenAI or Gemini' : undefined}
+                        title={option.id === 'safeTools' && !toolCallsAvailable ? 'Selected model cannot choose tools; use Web search or Research' : option.id === 'generateImage' && !imageGenerationAvailable ? 'Image generation requires OpenAI or Gemini' : undefined}
                         onClick={() => { setIntent(option.id); setIsPopoverOpen(false); setFileError(null) }}
                         className="rounded-md px-3 py-2 text-left text-xs text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50">
                         {option.label}

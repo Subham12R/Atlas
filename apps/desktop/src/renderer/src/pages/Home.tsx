@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import Sidebar from '@/components/Sidebar'
-import ChatArea, { Chat, Message, MessageAttachment } from '@/components/ChatArea'
+import ChatArea, { Chat, Message, MessageAttachment, type PlanStatus, type SendOptions } from '@/components/ChatArea'
 import Library from '@/components/Library'
 import Profile from '@/components/Profile'
 import Help from '@/components/Help'
@@ -157,7 +157,7 @@ function Home(): React.JSX.Element {
         attachments: Attachment[]
         mode: ExecutionMode
         draftKind: DraftKind
-        preferredModel: boolean
+        options: SendOptions
       }[]
     >()
   )
@@ -270,6 +270,41 @@ function Home(): React.JSX.Element {
     )
   }
 
+  const handlePlanStatus = (messageId: string, planStatus: PlanStatus): void => {
+    setChats((prev) =>
+      prev.map((chat) => ({
+        ...chat,
+        messages: chat.messages.map((m) => (m.id === messageId ? { ...m, planStatus } : m))
+      }))
+    )
+  }
+
+  /** Regenerates an assistant reply in place, replaying its prompt's saved request. */
+  const handleRetryMessage = (messageId: string): void => {
+    const chat = chats.find((c) => c.id === activeChatId)
+    const index = chat?.messages.findIndex((m) => m.id === messageId) ?? -1
+    const reply = chat?.messages[index]
+    const prompt = chat?.messages[index - 1]
+    if (!chat || !reply || chat.isSending || prompt?.sender !== 'user' || prompt.attachments?.length) return
+    const r = prompt.request
+    void handleSendMessage(
+      prompt.content,
+      r ? r.tool : (reply.tool ?? null),
+      r?.provider ?? reply.provider ?? chat.provider ?? 'local',
+      r ? r.model : (reply.model ?? chat.model ?? null),
+      [],
+      r?.mode ?? 'auto',
+      r?.draftKind ?? 'research_brief',
+      { reasoning: r?.reasoning ?? 'medium', allowCloud: r?.allowCloud ?? false },
+      reply
+    )
+  }
+
+  const openThread = (threadId: string): (() => void) | undefined => {
+    const target = chats.find((c) => c.threadId === threadId && c.id !== activeChatId)
+    return target ? () => setActiveChatId(target.id) : undefined
+  }
+
   const handleSendMessage = async (
     content: string,
     tool: string | null,
@@ -278,14 +313,17 @@ function Home(): React.JSX.Element {
     attachments: Attachment[],
     mode: ExecutionMode,
     draftKind: DraftKind = 'research_brief',
-    preferredModel = false
+    /** Reasoning level and Auto's cloud policy; provider === 'auto' lets the router pick. */
+    options: SendOptions = { reasoning: 'medium', allowCloud: false },
+    /** Regenerate this assistant reply in place instead of appending a turn. */
+    retryOf?: Message
   ): Promise<void> => {
     let chatId = activeChatId
     let baseChat = chatId ? chats.find((c) => c.id === chatId) : undefined
 
     if (baseChat?.isSending && chatId && !processingQueued.current.has(chatId)) {
       const queue = queuedMessages.current.get(chatId) || []
-      queue.push({ content, tool, provider, model, attachments, mode, draftKind, preferredModel })
+      queue.push({ content, tool, provider, model, attachments, mode, draftKind, options })
       queuedMessages.current.set(chatId, queue)
       setChats((prev) =>
         prev.map((chat) =>
@@ -350,8 +388,22 @@ function Home(): React.JSX.Element {
       sender: 'user',
       content,
       timestamp: timestamp(),
-      attachments: messageAttachments.length ? messageAttachments : undefined
+      attachments: messageAttachments.length ? messageAttachments : undefined,
+      request: { tool, mode, draftKind, provider, model, ...options }
     }
+    // A retry replays against the history before its own prompt, and swaps
+    // the reply in place; on failure/stop the original comes back (never lost).
+    const retryIndex = retryOf ? baseChat.messages.findIndex((m) => m.id === retryOf.id) : -1
+    const history = retryIndex > 0 ? baseChat.messages.slice(0, retryIndex - 1) : baseChat.messages
+    let assistantMsgId: string | null = null
+    const putReply = (messages: Message[], reply: Message): Message[] =>
+      retryOf && messages.some((m) => m.id === retryOf.id)
+        ? messages.map((m) => (m.id === retryOf.id ? reply : m))
+        : [...messages, reply]
+    const restoreOriginal = (messages: Message[], retryError?: string): Message[] =>
+      messages.map((m) =>
+        retryOf && (m.id === retryOf.id || m.id === assistantMsgId) ? { ...retryOf, retryError, isNew: false } : m
+      )
 
     setChats((prev) =>
       prev.map((chat) => {
@@ -365,7 +417,8 @@ function Home(): React.JSX.Element {
         return {
           ...chat,
           title,
-          messages: [...chat.messages, userMsg],
+          messages: retryOf ? chat.messages : [...chat.messages, userMsg],
+          autoModel: provider === 'auto',
           isSending: true,
           isGeneratingImage: resolvedTool === 'generateImage'
         }
@@ -379,18 +432,22 @@ function Home(): React.JSX.Element {
     // Image generation is a standalone request -- no conversation state, the
     // reply IS the image(s) -- so it never touches sessions/adapters at all.
     if (resolvedTool === 'generateImage') {
-      if (!supportsImageGeneration(provider)) {
+      const imageProvider = provider === 'auto' ? options.imageProvider || '' : provider
+      if (!supportsImageGeneration(imageProvider)) {
+        const unsupported = 'Image generation requires OpenAI or Gemini. Choose one of those providers.'
         setChats((prev) => prev.map((chat) => chat.id === targetChatId
-          ? { ...chat, isSending: false, isGeneratingImage: false, messages: [...chat.messages, {
-              id: `msg-${Date.now()}-e`, sender: 'assistant', timestamp: timestamp(),
-              content: '**Error:** Image generation requires OpenAI or Gemini. Choose one of those providers.'
-            }] }
+          ? { ...chat, isSending: false, isGeneratingImage: false, messages: retryOf
+              ? restoreOriginal(chat.messages, unsupported)
+              : [...chat.messages, {
+                  id: `msg-${Date.now()}-e`, sender: 'assistant', timestamp: timestamp(),
+                  content: `**Error:** ${unsupported}`
+                }] }
           : chat))
         abortControllers.current.delete(targetChatId)
         return
       }
       try {
-        const result = await generateImage(provider, content)
+        const result = await generateImage(imageProvider, content)
         const replyAttachments: MessageAttachment[] = []
         for (const img of result.images) {
           if (img.data && img.mime) {
@@ -419,7 +476,7 @@ function Home(): React.JSX.Element {
             chat.id === targetChatId
               ? {
                   ...chat,
-                  messages: [...chat.messages, assistantMsg],
+                  messages: putReply(chat.messages, assistantMsg),
                   isSending: false,
                   isGeneratingImage: false
                 }
@@ -442,7 +499,7 @@ function Home(): React.JSX.Element {
             chat.id === targetChatId
               ? {
                   ...chat,
-                  messages: [...chat.messages, errorMsg],
+                  messages: retryOf ? restoreOriginal(chat.messages, detail) : [...chat.messages, errorMsg],
                   isSending: false,
                   isGeneratingImage: false
                 }
@@ -455,25 +512,32 @@ function Home(): React.JSX.Element {
       return
     }
 
-    // Set once the (empty) assistant placeholder is pushed, so a failure
-    // partway through streaming can turn that same bubble into the error
-    // instead of leaving a permanently blank one sitting next to a separate
-    // error message.
-    let assistantMsgId: string | null = null
+    // assistantMsgId (declared above) is set once the (empty) placeholder is
+    // pushed, so a failure partway through streaming can turn that same
+    // bubble into the error instead of leaving a blank one beside it.
 
     try {
-      const agentMode = modeForTool(resolvedTool)
-      const route = mode === 'auto' && agentMode === 'chat'
-        ? await routeTurn(content, mode,
-            preferredModel ? { provider, model: model || '' } : undefined,
-            controller.signal)
+      const autoModel = provider === 'auto'
+      const requestedAgentMode = modeForTool(resolvedTool)
+      // Auto model: the router picks provider/model (cloud only with opt-in). Auto intent:
+      // it also classifies the mode and may add a tool call for current web info.
+      const route = autoModel || (mode === 'auto' && requestedAgentMode === 'chat')
+        ? await routeTurn(content.trim() || 'Describe the attached image.', mode,
+            autoModel ? undefined : { provider, model: model || '' },
+            controller.signal,
+            { allowCloud: options.allowCloud, reasoning: options.reasoning, agentMode: requestedAgentMode })
         : null
       if (route && (
         !['ready', 'degraded'].includes(route.state) || !route.model || !route.provider ||
-        (route.provider !== 'local' && (!preferredModel || route.provider !== provider))
+        (!autoModel && route.provider !== provider) ||
+        (autoModel && !options.allowCloud && route.provider !== 'local')
       )) {
         throw new ApiError(409, route.reason || 'No permitted model is available')
       }
+      // Safe-tool runs reject images, so a vision turn keeps plain chat.
+      const routedTool = resolvedTool || (imagePayloads.length ? null : route?.tool) || null
+      const agentMode = modeForTool(routedTool)
+      const reasoning = route?.reasoning ?? options.reasoning
       // Only an explicitly selected cloud model can leave the loopback-only Auto path.
       const turnMode = route?.provider && route.provider !== 'local' ? route.mode : mode
       const routedProvider = route?.provider ?? provider
@@ -498,8 +562,8 @@ function Home(): React.JSX.Element {
       if (profile) {
         promptToSend = buildPersonalizationContext(profile) + promptToSend
       }
-      if (switchingProvider || (!sessionId && baseChat.messages.length > 0)) {
-        promptToSend = buildSwitchContext(baseChat.messages) + promptToSend
+      if (switchingProvider || (!sessionId && history.length > 0)) {
+        promptToSend = buildSwitchContext(history) + promptToSend
       }
 
       if (controller.signal.aborted) throw new ApiAborted('request aborted')
@@ -531,14 +595,16 @@ function Home(): React.JSX.Element {
         provider: chatProvider,
         model: chatModel || undefined,
         isNew: true,
-        tool: resolvedTool || undefined,
-        routeReason: route ? `${route.mode} · ${route.model} · ${route.reason}` : undefined
+        tool: routedTool || undefined,
+        routeReason: route
+          ? `${route.mode} · ${route.model} · ${reasoning} reasoning${route.tool ? ` · ${route.tool === 'safeTools' ? 'tools' : 'web search'}` : ''} · ${route.reason}`
+          : undefined
       }
 
       setChats((prev) =>
         prev.map((chat) =>
           chat.id === targetChatId
-            ? { ...chat, messages: [...chat.messages, assistantMsg], isSending: true }
+            ? { ...chat, messages: putReply(chat.messages, assistantMsg), isSending: true }
             : chat
         )
       )
@@ -599,6 +665,8 @@ function Home(): React.JSX.Element {
                 if (event.type === 'run.completed') {
                   return {
                     ...message,
+                    trace: message.trace?.map((step) =>
+                      step.status === 'running' ? { ...step, status: 'done' as const } : step),
                     sources: event.sources || message.sources,
                     queries: event.queries || message.queries,
                     attachmentSources: event.attachments || message.attachmentSources,
@@ -609,17 +677,40 @@ function Home(): React.JSX.Element {
                 }
                 if (event.type === 'plan.ready') return {
                   ...message,
+                  trace: [...(message.trace || []), {
+                    label: `Planned ${event.queries.length} ${event.queries.length === 1 ? 'query' : 'queries'}`,
+                    status: 'done', detail: event.objective
+                  }],
                   queries: event.queries,
                   researchPlan: { objective: event.objective, freshness: event.freshness,
                     source_criteria: event.source_criteria },
                   runPhase: 'Searching'
                 }
-                if (event.type === 'plan.degraded') return { ...message, runPhase: 'Planning degraded' }
+                if (event.type === 'plan.degraded') return {
+                  ...message, runPhase: 'Planning degraded',
+                  trace: [...(message.trace || []), { label: 'Planning degraded', status: 'failed', detail: event.reason }]
+                }
                 if (event.type === 'tool.started') {
-                  return { ...message, runPhase: event.tool === 'fetch_page' ? 'Reading sources' : 'Searching' }
+                  return {
+                    ...message,
+                    runPhase: event.tool === 'fetch_page' ? 'Reading sources' : 'Searching',
+                    trace: [...(message.trace || []), {
+                      label: event.query ? `${event.tool.replace(/_/g, ' ')}: ${event.query}` : event.tool.replace(/_/g, ' '),
+                      tool: event.tool, status: 'running', detail: event.query
+                    }]
+                  }
                 }
                 if (event.type === 'tool.progress') return { ...message, runPhase: event.phase }
-                if (event.type === 'tool.failed') return { ...message, runPhase: event.reason || 'Partial results' }
+                if (event.type === 'tool.completed' || event.type === 'tool.failed') {
+                  const trace = [...(message.trace || [])]
+                  const index = trace.findLastIndex((step) => step.tool === event.tool && step.status === 'running')
+                  const status = event.type === 'tool.failed' ? 'failed' as const : 'done' as const
+                  if (index >= 0) trace[index] = { ...trace[index], status, detail: event.reason || trace[index].detail }
+                  else trace.push({ label: event.tool.replace(/_/g, ' '), tool: event.tool, status, detail: event.reason })
+                  return event.type === 'tool.failed'
+                    ? { ...message, trace, runPhase: event.reason || 'Partial results' }
+                    : { ...message, trace }
+                }
                 return message
               })
             }
@@ -629,7 +720,7 @@ function Home(): React.JSX.Element {
 
       try {
         if (agentMode !== 'chat') {
-          const recent = baseChat.messages
+          const recent = history
             .filter((message) => !message.content.startsWith('**Error:**'))
             .slice(-4)
             .map((message) => ({
@@ -643,6 +734,7 @@ function Home(): React.JSX.Element {
             instructions: buildFormattingRules() + (profile ? buildPersonalizationContext(profile) : ''),
             images: imagePayloads,
             recent,
+            reasoning,
             attachments: attachments
               .filter((att): att is FileAttachment => att.kind === 'file')
               .map((att) => ({ id: att.id, name: att.name, mime: 'text/plain', content: att.content }))
@@ -655,7 +747,8 @@ function Home(): React.JSX.Element {
             handleStreamToken,
             handleMemoryRecall,
             controller.signal,
-            turnMode
+            turnMode,
+            reasoning
           )
         }
       } catch (err) {
@@ -682,12 +775,13 @@ function Home(): React.JSX.Element {
 
           await sendMessageStream(
             sessionId,
-            switchingProvider ? promptToSend : buildSwitchContext(baseChat.messages) + promptToSend,
+            switchingProvider ? promptToSend : buildSwitchContext(history) + promptToSend,
             imagePayloads,
             handleStreamToken,
             handleMemoryRecall,
             controller.signal,
-            turnMode
+            turnMode,
+            reasoning
           )
         } else {
           throw err
@@ -707,7 +801,13 @@ function Home(): React.JSX.Element {
     } catch (err) {
       // Deliberately stopped by the user -- handleStopSending() already reset
       // isSending, so there's nothing further to do here.
-      if (err instanceof ApiAborted || controller.signal.aborted) return
+      if (err instanceof ApiAborted || controller.signal.aborted) {
+        if (retryOf) {
+          setChats((prev) => prev.map((chat) =>
+            chat.id === targetChatId ? { ...chat, messages: restoreOriginal(chat.messages) } : chat))
+        }
+        return
+      }
 
       const detail = friendlyErrorMessage(
         err,
@@ -719,6 +819,7 @@ function Home(): React.JSX.Element {
       setChats((prev) =>
         prev.map((chat) => {
           if (chat.id !== targetChatId) return chat
+          if (retryOf) return { ...chat, messages: restoreOriginal(chat.messages, detail), isSending: false }
           // The streaming placeholder is already sitting in the messages
           // array (possibly still empty) -- turn that same bubble into the
           // error instead of leaving a permanently blank one next to a
@@ -761,7 +862,7 @@ function Home(): React.JSX.Element {
           next.attachments,
           next.mode,
           next.draftKind,
-          next.preferredModel
+          next.options
         )
       }
     }
@@ -822,6 +923,9 @@ function Home(): React.JSX.Element {
           onTogglePin={handleTogglePin}
           onMessageRevealed={handleMessageRevealed}
           onStopSending={handleStopSending}
+          onRetryMessage={handleRetryMessage}
+          onPlanStatus={handlePlanStatus}
+          openThread={openThread}
         />
       )}
     </div>

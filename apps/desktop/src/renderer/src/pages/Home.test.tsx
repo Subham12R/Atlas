@@ -64,6 +64,45 @@ it('does not dispatch automatic image requests to a text-only provider', async (
   expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/images/generate'))).toBe(false)
 })
 
+it('replays bounded same-chat context when a stored session has expired', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  const stored = { id: 'old-chat', title: 'Previous session', isPinned: false, timestamp: '',
+    provider: 'local', model: 'installed:7b', sessionId: 'stale', threadId: 'old-thread', messages: [
+      { id: 'u1', sender: 'user', content: 'Our project label is silverpine.', timestamp: '' },
+      { id: 'a1', sender: 'assistant', content: 'silverpine is the label.', timestamp: '' },
+      { id: 'u2', sender: 'user', content: 'Check again', timestamp: '' },
+      { id: 'e2', sender: 'assistant', content: '**Error:** The agent run timed out. Try again.', timestamp: '' }
+    ] }
+  vi.stubGlobal('api', {
+    getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }),
+    getChats: async () => [stored], getProfile: async () => ({ name: '', avatarDataUrl: null }),
+    setChats: async () => {}
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+    const path = new URL(String(input)).pathname
+    if (path === '/sessions/stale/messages/stream') return new Response(JSON.stringify({ detail: 'no such session' }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+    if (path === '/sessions/new-session/messages/stream') return new Response('data: {"text":"silverpine"}\n\n')
+    return new Response(JSON.stringify(path === '/settings/providers'
+      ? { local: { configured: true, runtime: 'ollama' } }
+      : path === '/settings/providers/local/models'
+        ? { runtime: 'ollama', models: ['installed:7b'] }
+        : path === '/routing/turn'
+          ? { state: 'ready', mode: 'documentation', provider: 'local', model: 'installed:7b', reason: 'fixture' }
+          : { session_id: 'new-session', provider: 'local', thread_id: 'new-thread' }),
+    { headers: { 'Content-Type': 'application/json' } })
+  })
+  vi.stubGlobal('fetch', fetch)
+  render(<Home />)
+  fireEvent.click(await screen.findByText('Previous session'))
+  fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'What label did we choose?' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/sessions/new-session/messages/stream'))).toBe(true))
+  const retry = fetch.mock.calls.find(([url]) => String(url).endsWith('/sessions/new-session/messages/stream'))
+  const prompt = JSON.parse(String(retry?.[1]?.body)).prompt
+  expect(prompt).toContain('silverpine is the label')
+  expect(prompt).not.toContain('The agent run timed out')
+})
+
 it('routes Auto locally before creating a session and records the decision', async () => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal('api', {

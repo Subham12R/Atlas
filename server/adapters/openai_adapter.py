@@ -63,8 +63,8 @@ class OpenAIAdapter(BaseAdapter):
         return [{'type': 'function', 'function': tool} for tool in tools]
 
     async def run_turn(self, messages: list[TurnMessage], tools: list[dict]) -> AdapterTurn:
-        self._messages = self._turn_messages(messages)
-        kwargs = {'model': self.model, 'messages': self._messages}
+        # Agent turns supply their own context; never replace the session chat history.
+        kwargs = {'model': self.model, 'messages': self._turn_messages(messages)}
         if tools:
             kwargs['tools'] = self._tools(tools)
         response = await self._client.chat.completions.create(**kwargs)
@@ -76,14 +76,6 @@ class OpenAIAdapter(BaseAdapter):
         calls = tuple(ToolCall(id=c.id, name=c.function.name,
                                arguments=c.function.arguments)
                       for c in (message.tool_calls or []))
-        assistant = {'role': 'assistant', 'content': message.content or None}
-        if calls:
-            assistant['tool_calls'] = [{'id': c.id, 'type': 'function', 'function': {
-                'name': c.name, 'arguments': c.arguments
-            }} for c in calls]
-        else:
-            assistant['content'] = message.content or ''
-        self._messages.append(assistant)
         return AdapterTurn(text=message.content or '', calls=calls,
                            stop_reason=choice.finish_reason or 'stop')
 
@@ -94,14 +86,12 @@ class OpenAIAdapter(BaseAdapter):
             kwargs['tools'] = self._tools(tools)
         stream = await self._client.chat.completions.create(**kwargs)
         calls: dict[int, dict] = {}
-        text_parts = []
         stop_reason = 'stop'
         async for chunk in stream:
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
             if choice.delta.content:
-                text_parts.append(choice.delta.content)
                 yield AdapterEvent(kind='text.delta', text=choice.delta.content)
             for part in choice.delta.tool_calls or []:
                 call = calls.setdefault(part.index, {'id': '', 'name': '', 'arguments': ''})
@@ -122,32 +112,28 @@ class OpenAIAdapter(BaseAdapter):
             completed = ToolCall(**call)
             completed_calls.append(completed)
             yield AdapterEvent(kind='tool.call', call=completed)
-        assistant = {'role': 'assistant', 'content': ''.join(text_parts) or None}
-        if completed_calls:
-            assistant['tool_calls'] = [{'id': call.id, 'type': 'function', 'function': {
-                'name': call.name, 'arguments': call.arguments
-            }} for call in completed_calls]
-        self._messages = [*native, assistant]
         yield AdapterEvent(kind='turn.final', stop_reason=stop_reason)
 
     async def init(self) -> None:
         pass
 
     async def send(self, prompt: str, images: list[ImageInput] | None = None) -> Reply:
-        self._messages.append({"role": "user", "content": _content(prompt, images)})
+        messages = [*self._messages, {"role": "user", "content": _content(prompt, images)}]
         resp = await self._client.chat.completions.create(
-            model=self.model, messages=self._messages,
+            model=self.model, messages=messages,
         )
         text = resp.choices[0].message.content or ""
-        self._messages.append({"role": "assistant", "content": text})
+        if not text.strip():
+            raise ValueError('model returned no text')
+        self._messages = [*messages, {"role": "assistant", "content": text}]
         return Reply(text=text, provider=self.name,
                      meta={"model": resp.model,
                            "usage": resp.usage.model_dump() if resp.usage else None})
 
     async def send_stream(self, prompt: str, images: list[ImageInput] | None = None):
-        self._messages.append({"role": "user", "content": _content(prompt, images)})
+        messages = [*self._messages, {"role": "user", "content": _content(prompt, images)}]
         resp = await self._client.chat.completions.create(
-            model=self.model, messages=self._messages, stream=True
+            model=self.model, messages=messages, stream=True
         )
         text_chunks = []
         async for chunk in resp:
@@ -157,7 +143,9 @@ class OpenAIAdapter(BaseAdapter):
                 yield content
         
         full_text = "".join(text_chunks)
-        self._messages.append({"role": "assistant", "content": full_text})
+        if not full_text.strip():
+            raise ValueError('model returned no text')
+        self._messages = [*messages, {"role": "assistant", "content": full_text}]
 
     async def close(self) -> None:
         await self._client.close()

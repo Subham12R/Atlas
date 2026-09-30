@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 import uuid
@@ -21,6 +22,15 @@ from tools.local_search import AttachmentSearchInput, search_attached_files
 
 CITATION = re.compile(r'\[([SA]\d+)\]')
 GROUPED_CITATION = re.compile(r'\[((?:[SA]\d+,\s*)+[SA]\d+)\]')
+
+
+def agent_timeout_seconds(provider: str) -> int:
+    if provider != 'local':
+        return 90
+    try:
+        return min(300, max(90, int(os.environ.get('ATLAS_LOCAL_AGENT_TIMEOUT_SECONDS', '180'))))
+    except ValueError:
+        return 180
 
 
 class ResearchPlan(BaseModel):
@@ -82,7 +92,7 @@ async def research_run(request: AgentTurnRequest, adapter, provider: str, model:
                        emit: Callable[[dict], None], cancelled: asyncio.Event | None = None,
                        brain=None) -> ResearchRunResult:
     cancelled = cancelled or asyncio.Event()
-    deadline = time.monotonic() + 90
+    deadline = time.monotonic() + agent_timeout_seconds(provider)
     run_id = uuid.uuid4().hex
     context = ToolContext(run_id=run_id, allowed_tools=frozenset({'web_search', 'fetch_page'}),
                           deadline=deadline, cancelled=cancelled,

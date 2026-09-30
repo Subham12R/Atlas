@@ -70,9 +70,9 @@ function splitDataUrl(dataUrl: string): { data: string; mime: string } {
  * switched-to provider as a one-time bootstrap -- not re-injected on every
  * later turn, since that provider's own session takes over from there. */
 function buildSwitchContext(messages: Message[]): string {
-  const lastFew = messages.slice(-4)
+  const lastFew = messages.filter((m) => !m.content.startsWith('**Error:**')).slice(-4)
   if (lastFew.length === 0) return ''
-  const lines = lastFew.map((m) => `${m.sender === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+  const lines = lastFew.map((m) => `${m.sender === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 1000)}`)
   return `[Recent conversation before switching model]\n${lines.join('\n')}\n\n`
 }
 
@@ -498,7 +498,7 @@ function Home(): React.JSX.Element {
       if (profile) {
         promptToSend = buildPersonalizationContext(profile) + promptToSend
       }
-      if (switchingProvider) {
+      if (switchingProvider || (!sessionId && baseChat.messages.length > 0)) {
         promptToSend = buildSwitchContext(baseChat.messages) + promptToSend
       }
 
@@ -629,10 +629,13 @@ function Home(): React.JSX.Element {
 
       try {
         if (agentMode !== 'chat') {
-          const recent = baseChat.messages.slice(-4).map((message) => ({
-            role: message.sender,
-            content: message.content.slice(0, 2000)
-          }))
+          const recent = baseChat.messages
+            .filter((message) => !message.content.startsWith('**Error:**'))
+            .slice(-4)
+            .map((message) => ({
+              role: message.sender,
+              content: message.content.slice(0, 2000)
+            }))
           await sendAgentStream(sessionId, {
             prompt: content,
             mode: agentMode,
@@ -679,7 +682,7 @@ function Home(): React.JSX.Element {
 
           await sendMessageStream(
             sessionId,
-            promptToSend,
+            switchingProvider ? promptToSend : buildSwitchContext(baseChat.messages) + promptToSend,
             imagePayloads,
             handleStreamToken,
             handleMemoryRecall,

@@ -61,7 +61,9 @@ async def _free_search(query: str, max_results: int) -> dict:
         raise SearchUnavailable('MCP Python SDK is not installed') from error
     params = StdioServerParameters(command=executable, args=['--transport', 'stdio'],
                                    env={'SEARCH_MCP_DOWNLOAD_ENABLED': 'false',
-                                        'SEARCH_MCP_TRANSPORT': 'stdio'})
+                                        'SEARCH_MCP_TRANSPORT': 'stdio',
+                                        # Its default 'moderate' let adult sites into results.
+                                        'SEARCH_MCP_SAFESEARCH': 'strict'})
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()

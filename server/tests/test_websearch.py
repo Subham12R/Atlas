@@ -117,7 +117,8 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data['results'][0]['snippet'], 'Excerpt')
         self.assertEqual(calls[0], ('spawn', '/fixture/search-mcp', ['--transport', 'stdio'],
                                     {'SEARCH_MCP_DOWNLOAD_ENABLED': 'false',
-                                     'SEARCH_MCP_TRANSPORT': 'stdio'}))
+                                     'SEARCH_MCP_TRANSPORT': 'stdio',
+                                     'SEARCH_MCP_SAFESEARCH': 'strict'}))
         self.assertEqual(calls[1], ('tool', 'search',
                                     {'query': 'guide', 'max_results': 3, 'format': 'json'}))
 

@@ -20,6 +20,7 @@ from tools.web import FetchInput, fetch_page
 from tools.local_search import AttachmentSearchInput, search_attached_files
 
 CITATION = re.compile(r'\[([SA]\d+)\]')
+GROUPED_CITATION = re.compile(r'\[((?:[SA]\d+,\s*)+[SA]\d+)\]')
 
 
 class ResearchPlan(BaseModel):
@@ -64,6 +65,8 @@ class ResearchRunResult(BaseModel):
 
 
 def validate_citations(answer: str, source_ids: set[str]) -> tuple[str, list[str]]:
+    answer = GROUPED_CITATION.sub(
+        lambda match: ' '.join(f'[{sid.strip()}]' for sid in match.group(1).split(',')), answer)
     unknown = sorted({sid for sid in CITATION.findall(answer) if sid not in source_ids})
     return CITATION.sub(lambda m: m.group() if m.group(1) in source_ids else '', answer), unknown
 
@@ -203,7 +206,7 @@ async def research_run(request: AgentTurnRequest, adapter, provider: str, model:
     _check(cancelled, deadline)
     evidence_ids = set(context.sources) | {a['source_id'] for a in attached}
     answer, invalid = validate_citations(reply.text, evidence_ids)
-    has_citation = any(source_id in evidence_ids for source_id in CITATION.findall(reply.text))
+    has_citation = any(source_id in evidence_ids for source_id in CITATION.findall(answer))
     missing_citation = bool(evidence_ids) and not has_citation
     if invalid or missing_citation:
         emit({'type': 'tool.progress', 'run_id': run_id, 'phase': 'Checking citations'})
@@ -216,7 +219,7 @@ async def research_run(request: AgentTurnRequest, adapter, provider: str, model:
                                           timeout=max(0.01, deadline - time.monotonic()))
         _check(cancelled, deadline)
         answer, invalid = validate_citations(repaired.text, evidence_ids)
-        has_citation = any(source_id in evidence_ids for source_id in CITATION.findall(repaired.text))
+        has_citation = any(source_id in evidence_ids for source_id in CITATION.findall(answer))
         missing_citation = bool(evidence_ids) and not has_citation
         if invalid or missing_citation:
             partial = True

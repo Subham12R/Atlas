@@ -1,6 +1,6 @@
 # Chat and agent reliability — audit and implementation plan
 
-Status: audit/plan only; no chat or server behavior changed in this pass. This follows the existing [agentic-tools design](../specs/2026-09-29-agentic-tools-design.md) and [multi-mode spec](../specs/2026-09-29-atlas-multi-mode-assistant-design.md). Do not confuse the earlier implementation plans' historical checkboxes with current runtime behavior.
+Status (2026-09-30): implementation in progress on `feat/chat-agent-reliability`. Slices 1–2 have typed failures, a per-chat intent selector and heading rendering; slice 3 has offline pronoun clarification, grouped citation normalization and PDF link parity. Unsupported image providers are blocked before request dispatch; the stop control is restored. Slice 4's persisted activity trace/beUI integration and slice 5's missing tools/approval API remain unimplemented. Slice 6's dot pitch is tightened but has not been visually verified in Electron. This follows the existing [agentic-tools design](../specs/2026-09-29-agentic-tools-design.md) and [multi-mode spec](../specs/2026-09-29-atlas-multi-mode-assistant-design.md). Do not confuse the earlier implementation plans' historical checkboxes with current runtime behavior.
 
 ## Objective and evidence
 
@@ -78,4 +78,4 @@ These are triage leads, not claimed root causes. Test with redacted run ID/mode/
 - Renderer: `cd apps/desktop && npx vitest run`, `npm run typecheck`, targeted ESLint and `npm run build`; inspect diffs for generated/lock changes and unused old components. Exercise a recorded authenticated SSE fixture in an Electron renderer with no live keys; browser/Electron visual check for both the title bar and chat states.
 - Live provider/search QA is opt-in, can cost money and expose query data. The supplied PDF alone does not verify a Tavily call, provider model, backend revision, or permission outcome.
 
-**Next action:** implement slice 1 with a failing cross-boundary fixture, then composer/Markdown slice 2; re-evaluate the PDF failure when a safe run code/phase can be captured. Do not bulk-install beUI components or enable non-existent tools before their backend contracts exist.
+**Next action:** implement and verify slice 4's persisted, bounded event trace before changing the activity UI. Re-evaluate the PDF failures only with a safe run code/phase; do not bulk-install beUI components or enable non-existent tools before their backend contracts exist.

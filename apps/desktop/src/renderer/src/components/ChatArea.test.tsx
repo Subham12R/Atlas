@@ -59,15 +59,15 @@ it('passes the selected mode and existing prompt fields to its parent', async ()
   )
 
   await waitFor(() => expect(screen.getByText('Local model')).toBeTruthy())
-  fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Auto' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Research' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Intent: Auto' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Research web' }))
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), {
     target: { value: 'Find the facts' }
   })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
   expect(onSendMessage).toHaveBeenCalledWith(
-    'Find the facts', null, 'local', null, [], 'research', 'research_brief', false
+    'Find the facts', 'deepResearch', 'local', null, [], 'auto', 'research_brief', false
   )
 })
 
@@ -259,4 +259,26 @@ it('shows the loading state only while a reply is pending', async () => {
   expect(await screen.findByRole('status', { name: 'Thinking' })).toBeTruthy()
   rerender(<ChatArea {...props} activeChat={{ ...chat, isSending: false }} />)
   expect(screen.queryByRole('status', { name: 'Thinking' })).toBeNull()
+})
+
+it('renders level-three and level-four headings without interpreting fenced code', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', { getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }) })
+  vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>(async (input) =>
+    new Response(JSON.stringify(String(input).endsWith('/settings/providers/local/models')
+      ? { runtime: 'ollama', models: [] }
+      : { local: { configured: true, runtime: 'ollama' } }),
+      { headers: { 'Content-Type': 'application/json' } })))
+  const chat: Chat = {
+    id: 'markdown', title: 'Test', isPinned: false, timestamp: '', provider: 'local',
+    sessionId: null, threadId: null,
+    messages: [{ id: 'answer', sender: 'assistant', timestamp: '',
+      content: '### Context\n#### 3.3 Dynamic tool calling\n```md\n#### literal code\n```' }]
+  }
+  render(<ChatArea isSidebarCollapsed={false} setIsSidebarCollapsed={vi.fn()}
+    activeChat={chat} onSendMessage={vi.fn()} onNewChat={vi.fn()}
+    onTogglePin={vi.fn()} onMessageRevealed={vi.fn()} onStopSending={vi.fn()} />)
+  expect(screen.getByRole('heading', { level: 3, name: 'Context' })).toBeTruthy()
+  expect(screen.getByRole('heading', { level: 4, name: '3.3 Dynamic tool calling' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'literal code' })).toBeNull()
 })

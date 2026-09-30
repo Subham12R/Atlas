@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 import json
+import logging
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -36,10 +37,12 @@ import imagegen
 import voice
 import websearch
 from adapters.base import ImageInput
-from adapters.openai_adapter import OpenAIAdapter
-from adapters.anthropic_adapter import AnthropicAdapter
-from adapters.gemini_adapter import GeminiAdapter
+from adapters.openai_adapter import OpenAIAdapter, DEFAULT_MODEL as OPENAI_DEFAULT_MODEL
+from adapters.anthropic_adapter import AnthropicAdapter, DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL
+from adapters.gemini_adapter import GeminiAdapter, DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
+from adapters.openrouter_adapter import DEFAULT_MODEL as OPENROUTER_DEFAULT_MODEL
 from tools.contracts import AgentEventAdapter, AgentTurnRequest
+from tools.registry import ToolDenied, ToolNotFound
 from agents.runner import run_selected
 from factory import (ANON_OK, BRAIN_ENABLED, BRAIN_TOPK, IMAGE_GEN_MODELS,
                      IMAGE_GEN_PROVIDERS, MODELS, PROVIDERS, AuthMissing,
@@ -120,18 +123,32 @@ class TurnRouteRequest(BaseModel):
 
 @app.post('/routing/turn')
 async def route_turn(body: TurnRouteRequest):
-    # Only a user-configured local text model is eligible. No implied cloud or tool grant.
-    base_url = _local_base_url()
-    local_model = credentials_store.get_value('LOCAL_LLM_MODEL')
-    models = ([local_model] if local_model else await _discover_local_models(base_url)) \
-        if is_loopback_endpoint(base_url) else []
-    candidates = [ModelCandidate('local', model,
-                                 frozenset({'research', 'coding', 'documentation'}), True)
-                  for model in models if model and not re.search(
-                      r'(embedding|embed-|unlimited-ocr|\bocr\b)', model, re.I)]
+    # Cloud requires a named, configured model preference; never silently fall back to it.
     preference = ((body.preference.provider, body.preference.model)
                   if body.preference else None)
-    decision = choose_model(body.prompt, body.mode, candidates, ExecutionPolicy(), preference)
+    candidates = []
+    if preference and preference[0] != 'local':
+        provider = preference[0]
+        if credentials_store.get_value(PROVIDER_ENV_KEYS[provider]):
+            defaults = {'openai': OPENAI_DEFAULT_MODEL, 'anthropic': ANTHROPIC_DEFAULT_MODEL,
+                        'gemini': GEMINI_DEFAULT_MODEL, 'openrouter': OPENROUTER_DEFAULT_MODEL}
+            model = (credentials_store.get_value('OPENROUTER_MODEL') or defaults[provider]
+                     if provider == 'openrouter' else defaults[provider])
+            candidates.append(ModelCandidate(provider, model,
+                                             frozenset({'research', 'coding', 'documentation'}), False))
+            preference = (provider, preference[1] or model)
+    else:
+        base_url = _local_base_url()
+        local_model = credentials_store.get_value('LOCAL_LLM_MODEL')
+        models = ([local_model] if local_model else await _discover_local_models(base_url)) \
+            if is_loopback_endpoint(base_url) else []
+        candidates = [ModelCandidate('local', model,
+                                     frozenset({'research', 'coding', 'documentation'}), True)
+                      for model in models if model and not re.search(
+                          r'(embedding|embed-|unlimited-ocr|\bocr\b)', model, re.I)]
+    decision = choose_model(body.prompt, body.mode, candidates,
+                            ExecutionPolicy(allow_cloud=bool(preference and preference[0] != 'local')),
+                            preference)
     return {'state': decision.state, 'mode': decision.mode, 'provider': decision.provider,
             'model': decision.model, 'reason': decision.reason}
 
@@ -647,11 +664,17 @@ async def agent_stream(sid: str, body: AgentTurnRequest, request: Request):
     async def events():
         queue: asyncio.Queue = asyncio.Queue()
         cancelled = asyncio.Event()
+        run_id = None
+        phase = None
 
         async def work():
             async with lock:
                 def emit(event: dict) -> None:
+                    nonlocal run_id, phase
                     validated = AgentEventAdapter.validate_python(event)
+                    run_id = event.get('run_id') or run_id
+                    if event['type'] in ('tool.started', 'tool.progress', 'plan.ready'):
+                        phase = event.get('tool') or event.get('phase') or 'planning'
                     queue.put_nowait(validated.model_dump(exclude_none=True))
 
                 try:
@@ -663,8 +686,22 @@ async def agent_stream(sid: str, body: AgentTurnRequest, request: Request):
                     cancelled.set()
                     emit({'type': 'run.cancelled'})
                 except Exception as e:
-                    reason = str(e) if 'no Tavily API key' in str(e) else 'agent run failed'
-                    emit({'type': 'run.failed', 'reason': reason})
+                    if isinstance(e, ValueError) and str(e) == 'selected model does not support native tool calls':
+                        code, reason = 'unsupported_model', 'This model cannot choose tools. Choose a supported model, or use Search or Research.'
+                    elif isinstance(e, ValueError) and str(e) == 'no Tavily API key configured':
+                        code, reason = 'key_unavailable', 'Web search needs a Tavily key in Settings.'
+                    elif isinstance(e, (TimeoutError, asyncio.TimeoutError)):
+                        code, reason = 'timeout', 'The agent run timed out. Try again.'
+                    elif isinstance(e, (ToolDenied, ToolNotFound)):
+                        code, reason = 'invalid_call', 'The tool call was denied or unavailable.'
+                    elif isinstance(e, ValueError) and 'budget' in str(e):
+                        code, reason = 'budget', 'The agent reached its tool limit.'
+                    else:
+                        code, reason = 'internal', 'The agent could not complete this run. Try again or change models.'
+                    logging.getLogger(__name__).warning('agent run failed: code=%s run_id=%s phase=%s',
+                                                        code, run_id or 'unknown', phase or 'start')
+                    emit({'type': 'run.failed', 'run_id': run_id, 'code': code,
+                          'phase': phase, 'reason': reason})
                 finally:
                     queue.put_nowait(None)
 

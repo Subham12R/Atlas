@@ -9,7 +9,8 @@ import api
 class RoutingApiTests(unittest.TestCase):
     def test_autoroute_is_authenticated_local_only_and_explainable(self):
         with patch.object(api, 'API_TOKEN', 'a' * 64), \
-             patch.object(api.credentials_store, 'get_value', return_value='installed:7b'), \
+             patch.object(api.credentials_store, 'get_value',
+                          side_effect=lambda key: 'installed:7b' if key == 'LOCAL_LLM_MODEL' else ''), \
              patch.object(api, '_local_base_url', return_value='http://127.0.0.1:11434/v1'), \
              TestClient(api.app) as client:
             body = {'prompt': 'Fix this function', 'mode': 'auto'}
@@ -24,6 +25,33 @@ class RoutingApiTests(unittest.TestCase):
             self.assertEqual(forbidden.json()['state'], 'no_eligible_model')
             self.assertIsNone(forbidden.json()['provider'])
             self.assertEqual(client.post('/routing/turn', json={**body, 'mode': 'unknown'}, headers=headers).status_code, 422)
+
+    def test_explicitly_preferred_configured_cloud_model_is_eligible_in_auto(self):
+        def configured(key):
+            return 'configured-key' if key in ('OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
+                                               'GEMINI_API_KEY', 'OPENROUTER_API_KEY') else ''
+
+        with patch.object(api, 'API_TOKEN', 'a' * 64), \
+             patch.object(api.credentials_store, 'get_value', side_effect=configured), \
+             patch.object(api, '_local_base_url', return_value='http://127.0.0.1:11434/v1'), \
+             patch.object(api, '_discover_local_models', return_value=[]), \
+             TestClient(api.app) as client:
+            headers = {'Authorization': 'Bearer ' + 'a' * 64}
+            request = {'prompt': 'Fix this function', 'mode': 'auto'}
+            for provider, model in (('openai', 'gpt-4o'), ('anthropic', 'claude-sonnet-4-5'),
+                                    ('gemini', 'gemini-2.5-flash'), ('openrouter', 'openai/gpt-4o')):
+                with self.subTest(provider=provider):
+                    selected = client.post('/routing/turn', json={**request, 'preference': {
+                        'provider': provider, 'model': ''}}, headers=headers)
+                    self.assertEqual((selected.json()['state'], selected.json()['mode'],
+                                      selected.json()['provider'], selected.json()['model']),
+                                     ('ready', 'coding', provider, model))
+            unselected = client.post('/routing/turn', json=request, headers=headers)
+            self.assertEqual(unselected.json()['state'], 'no_eligible_model')
+            with patch.object(api.credentials_store, 'get_value', return_value=''):
+                unconfigured = client.post('/routing/turn', json={**request, 'preference': {
+                    'provider': 'anthropic', 'model': ''}}, headers=headers)
+            self.assertEqual(unconfigured.json()['state'], 'no_eligible_model')
 
     def test_discovered_local_model_is_eligible_without_saved_default(self):
         with patch.object(api, 'API_TOKEN', 'a' * 64), \

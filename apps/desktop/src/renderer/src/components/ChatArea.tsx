@@ -32,6 +32,7 @@ import {
   type ProviderSettingsMap
 } from '@/lib/api'
 import type { ExecutionMode } from '@/lib/modes'
+import type { ChatIntent, ComposerPreference } from '@/lib/chat-intent'
 import ThemeSwitch from '@/components/ui/theme-switch'
 
 export interface MessageFileAttachment {
@@ -103,6 +104,8 @@ interface ChatAreaProps {
   isSidebarCollapsed: boolean
   setIsSidebarCollapsed: (collapsed: boolean) => void
   activeChat: Chat | null
+  composerPreference?: ComposerPreference
+  onComposerChange?: (update: Partial<ComposerPreference>) => void
   onSendMessage: (
     content: string,
     tool: string | null,
@@ -384,6 +387,8 @@ export default function ChatArea({
   isSidebarCollapsed,
   setIsSidebarCollapsed,
   activeChat,
+  composerPreference,
+  onComposerChange,
   onSendMessage,
   onNewChat,
   onTogglePin,
@@ -506,7 +511,7 @@ export default function ChatArea({
       attachments,
       mode,
       draftKind,
-      preferredModel
+      preferredModel || (activeChat?.provider === selectedModelObj.provider && selectedModelObj.provider !== 'local')
     )
   }
 
@@ -731,8 +736,9 @@ export default function ChatArea({
         // fall through -- this line still needs its own normal handling
       }
 
-      // Check for headings
-      if (line.startsWith('# ')) {
+      // Markdown permits up to three spaces before an ATX heading.
+      const headingLine = /^ {0,3}#/.test(line) ? line.trimStart() : line
+      if (headingLine.startsWith('# ')) {
         const listNode = renderList(`list-${index}`)
         if (listNode) renderedNodes.push(listNode)
         renderedNodes.push(
@@ -740,12 +746,12 @@ export default function ChatArea({
             key={`h1-${index}`}
             className="text-lg font-semibold tracking-tight text-[#1A1A19] dark:text-[#EAE8E3] mt-6 mb-2"
           >
-            {parseInlineStyles(line.substring(2))}
+            {parseInlineStyles(headingLine.substring(2))}
           </h1>
         )
         return
       }
-      if (line.startsWith('## ')) {
+      if (headingLine.startsWith('## ')) {
         const listNode = renderList(`list-${index}`)
         if (listNode) renderedNodes.push(listNode)
         renderedNodes.push(
@@ -753,21 +759,34 @@ export default function ChatArea({
             key={`h2-${index}`}
             className="text-base font-semibold tracking-tight text-[#1A1A19] dark:text-[#EAE8E3] mt-5 mb-2"
           >
-            {parseInlineStyles(line.substring(3))}
+            {parseInlineStyles(headingLine.substring(3))}
           </h2>
         )
         return
       }
-      if (line.startsWith('### ')) {
+      if (headingLine.startsWith('### ')) {
         const listNode = renderList(`list-${index}`)
         if (listNode) renderedNodes.push(listNode)
         renderedNodes.push(
           <h3
             key={`h3-${index}`}
-            className="text-sm font-semibold tracking-tight text-[#1A1A19] dark:text-[#EAE8E3] mt-4 mb-1.5"
+            className="text-[15px] font-semibold tracking-tight text-[#1A1A19] dark:text-[#EAE8E3] mt-4 mb-1.5"
           >
-            {parseInlineStyles(line.substring(4))}
+            {parseInlineStyles(headingLine.substring(4))}
           </h3>
+        )
+        return
+      }
+      const deeperHeading = /^(#{4,6}) (.+)$/.exec(headingLine)
+      if (deeperHeading) {
+        const Tag = `h${deeperHeading[1].length}` as 'h4' | 'h5' | 'h6'
+        const listNode = renderList(`list-${index}`)
+        if (listNode) renderedNodes.push(listNode)
+        renderedNodes.push(
+          <Tag key={`h${deeperHeading[1].length}-${index}`}
+            className="mt-3 mb-1.5 text-sm font-semibold text-[#1A1A19] dark:text-[#EAE8E3]">
+            {parseInlineStyles(deeperHeading[2])}
+          </Tag>
         )
         return
       }
@@ -1055,6 +1074,10 @@ export default function ChatArea({
                   modelPicker={modelPicker}
                   canSend={activeModels.length > 0}
                   toolCallsAvailable={toolCallsAvailable}
+                  intent={composerPreference?.intent}
+                  draftKind={composerPreference?.draftKind}
+                  onIntentChange={(intent: ChatIntent) => onComposerChange?.({ intent })}
+                  onDraftKindChange={(draftKind) => onComposerChange?.({ draftKind })}
                 />
               </div>
 
@@ -1233,6 +1256,10 @@ export default function ChatArea({
               canSend={activeModels.length > 0}
               isBusy={activeChat.isSending}
               toolCallsAvailable={toolCallsAvailable}
+              intent={composerPreference?.intent}
+              draftKind={composerPreference?.draftKind}
+              onIntentChange={(intent: ChatIntent) => onComposerChange?.({ intent })}
+              onDraftKindChange={(draftKind) => onComposerChange?.({ draftKind })}
               onStop={() => onStopSending(activeChat.id)}
             />
           </div>

@@ -182,6 +182,10 @@ class RunCompleted(StrictModel):
 
 class RunFailed(StrictModel):
     type: Literal['run.failed']
+    run_id: str | None = None
+    code: Literal['unsupported_model', 'key_unavailable', 'timeout', 'budget',
+                  'invalid_call', 'provider_unavailable', 'internal'] = 'internal'
+    phase: str | None = Field(default=None, max_length=100)
     reason: str = Field(max_length=500)
 
 

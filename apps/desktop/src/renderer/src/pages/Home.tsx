@@ -7,6 +7,7 @@ import Help from '@/components/Help'
 import type { Attachment, FileAttachment } from '@/components/ui/chatgpt-prompt-input'
 import { modeForTool, type AgentEvent } from '@/lib/agent-events.mjs'
 import type { ExecutionMode } from '@/lib/modes'
+import type { ComposerPreference } from '@/lib/chat-intent'
 
 interface UserProfile {
   name: string
@@ -136,6 +137,8 @@ function Home(): React.JSX.Element {
   const [chatsLoaded, setChatsLoaded] = useState(false)
   const hasLoadedStoredChats = useRef(false)
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
+  // UI preference only; never persisted as an approval or inherited by a new chat.
+  const [composerByChat, setComposerByChat] = useState<Record<string, ComposerPreference>>({})
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeView, setActiveView] = useState<View>('chat')
@@ -235,6 +238,11 @@ function Home(): React.JSX.Element {
       })
     }
     setChats((prev) => prev.filter((c) => c.id !== id))
+    setComposerByChat((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
     if (activeChatId === id) {
       const remaining = chats.filter((c) => c.id !== id)
       setActiveChatId(remaining.length > 0 ? remaining[0].id : null)
@@ -300,6 +308,11 @@ function Home(): React.JSX.Element {
         threadId: null
       }
       setChats((prev) => [baseChat as Chat, ...prev])
+      const newId = chatId
+      setComposerByChat((prev) => {
+        const { new: blank, ...rest } = prev
+        return blank ? { ...rest, [newId]: blank } : rest
+      })
       setActiveChatId(chatId)
     }
 
@@ -446,10 +459,13 @@ function Home(): React.JSX.Element {
             controller.signal)
         : null
       if (route && (
-        !['ready', 'degraded'].includes(route.state) || !route.model || route.provider !== 'local'
+        !['ready', 'degraded'].includes(route.state) || !route.model || !route.provider ||
+        (route.provider !== 'local' && (!preferredModel || route.provider !== provider))
       )) {
-        throw new ApiError(409, route.reason || 'No permitted local model is available')
+        throw new ApiError(409, route.reason || 'No permitted model is available')
       }
+      // Only an explicitly selected cloud model can leave the loopback-only Auto path.
+      const turnMode = route?.provider && route.provider !== 'local' ? route.mode : mode
       const routedProvider = route?.provider ?? provider
       const routedModel = route?.model ?? model
       // A new route gets a new session; the previous provider context is explicitly bounded.
@@ -626,7 +642,7 @@ function Home(): React.JSX.Element {
             handleStreamToken,
             handleMemoryRecall,
             controller.signal,
-            mode
+            turnMode
           )
         }
       } catch (err) {
@@ -658,7 +674,7 @@ function Home(): React.JSX.Element {
             handleStreamToken,
             handleMemoryRecall,
             controller.signal,
-            mode
+            turnMode
           )
         } else {
           throw err
@@ -780,6 +796,14 @@ function Home(): React.JSX.Element {
           isSidebarCollapsed={isSidebarCollapsed}
           setIsSidebarCollapsed={setIsSidebarCollapsed}
           activeChat={activeChat}
+          composerPreference={composerByChat[activeChatId ?? 'new']}
+          onComposerChange={(update) => {
+            const key = activeChatId ?? 'new'
+            setComposerByChat((prev) => ({ ...prev, [key]: {
+              intent: update.intent ?? prev[key]?.intent ?? 'auto',
+              draftKind: update.draftKind ?? prev[key]?.draftKind ?? 'research_brief'
+            } }))
+          }}
           onSendMessage={handleSendMessage}
           onNewChat={handleNewChat}
           onTogglePin={handleTogglePin}

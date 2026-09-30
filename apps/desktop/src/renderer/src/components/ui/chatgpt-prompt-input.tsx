@@ -5,7 +5,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Csv01Icon, File01Icon, SourceCodeIcon } from '@hugeicons/core-free-icons'
 import { ApiError, friendlyErrorMessage, transcribeAudio, type DraftKind } from '@/lib/api'
-import { ModeSelector } from '@/components/ModeSelector'
+import { INTENT_OPTIONS, requestForIntent, type ChatIntent } from '@/lib/chat-intent'
 import { attachmentLimitError } from '@/lib/attachment-limits.mjs'
 import type { ExecutionMode } from '@/lib/modes'
 
@@ -129,24 +129,6 @@ const PlusIcon = (props: React.SVGProps<SVGSVGElement>) => (
     />
   </svg>
 )
-const Settings2Icon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg
-    width="24"
-    height="24"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    {...props}
-  >
-    <path d="M20 7h-9" />
-    <path d="M14 17H5" />
-    <circle cx="17" cy="17" r="3" />
-    <circle cx="7" cy="7" r="3" />
-  </svg>
-)
 const SendIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg
     width="24"
@@ -180,99 +162,6 @@ const XIcon = (props: React.SVGProps<SVGSVGElement>) => (
   >
     <line x1="18" y1="6" x2="6" y2="18" />
     <line x1="6" y1="6" x2="18" y2="18" />
-  </svg>
-)
-const GlobeIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg
-    width="24"
-    height="24"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    {...props}
-  >
-    <circle cx="12" cy="12" r="10" />
-    <path d="M2 12h20" />
-    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-  </svg>
-)
-const PencilIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg
-    width="24"
-    height="24"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    {...props}
-  >
-    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-    <path d="m15 5 4 4" />
-  </svg>
-)
-const TelescopeIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 512 512" fill="currentColor" {...props}>
-    <g>
-      <path d="M452.425,202.575l-38.269-23.11c-1.266-10.321-5.924-18.596-13.711-21.947l-86.843-52.444l-0.275,0.598c-3.571-7.653-9.014-13.553-16.212-16.668L166.929,10.412l-0.236,0.543v-0.016c-3.453-2.856-7.347-5.239-11.594-7.08C82.569-10.435,40.76,14.5,21.516,59.203C2.275,103.827,12.82,151.417,45.142,165.36c4.256,1.826,8.669,3.005,13.106,3.556l-0.19,0.464l146.548,40.669c7.19,3.107,15.206,3.004,23.229,0.37l-0.236,0.566L365.55,238.5c7.819,3.366,17.094,1.125,25.502-5.082l42.957,11.909c7.67,3.312,18.014-3.548,23.104-15.362C462.202,218.158,460.11,205.894,452.425,202.575z M154.516,99.56c-11.792,27.374-31.402,43.783-47.19,49.132c-6.962,2.281-13.176,2.556-17.605,0.637c-14.536-6.254-25.235-41.856-8.252-81.243c16.976-39.378,50.186-56.055,64.723-49.785c4.429,1.904,8.519,6.592,11.626,13.246C164.774,46.699,166.3,72.216,154.516,99.56z" />
-      <path d="M297.068,325.878c-1.959-2.706-2.25-6.269-0.724-9.25c1.518-2.981,4.562-4.846,7.913-4.846h4.468c4.909,0,8.889-3.972,8.889-8.897v-7.74c0-4.909-3.98-8.897-8.889-8.897h-85.789c-4.908,0-8.897,3.988-8.897,8.897v7.74c0,4.925,3.989,8.897,8.897,8.897h4.492c3.344,0,6.388,1.865,7.914,4.846c1.518,2.981,1.235,6.544-0.732,9.25L128.715,459.116c-3.225,4.287-2.352,10.36,1.927,13.569c4.295,3.225,10.368,2.344,13.578-1.943l107.884-122.17l4.036,153.738c0,5.333,4.342,9.691,9.691,9.691c5.358,0,9.692-4.358,9.692-9.691l4.043-153.738l107.885,122.17c3.209,4.287,9.282,5.168,13.568,1.943c4.288-3.209,5.145-9.282,1.951-13.569L297.068,325.878z" />
-      <path d="M287.227,250.81c0-11.807-9.573-21.388-21.396-21.388c-11.807,0-21.38,9.582-21.38,21.388c0,11.831,9.574,21.428,21.38,21.428C277.654,272.238,287.227,262.642,287.227,250.81z" />
-    </g>
-  </svg>
-)
-const LightbulbIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" fill="none" {...props}>
-    <path
-      d="M12 7C9.23858 7 7 9.23858 7 12C7 13.3613 7.54402 14.5955 8.42651 15.4972C8.77025 15.8484 9.05281 16.2663 9.14923 16.7482L9.67833 19.3924C9.86537 20.3272 10.6862 21 11.6395 21H12.3605C13.3138 21 14.1346 20.3272 14.3217 19.3924L14.8508 16.7482C14.9472 16.2663 15.2297 15.8484 15.5735 15.4972C16.456 14.5955 17 13.3613 17 12C17 9.23858 14.7614 7 12 7Z"
-      stroke="currentColor"
-      strokeWidth="2"
-    />
-    <path
-      d="M12 4V3"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M18 6L19 5"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M20 12H21"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M4 12H3"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M5 5L6 6"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M10 17H14"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
   </svg>
 )
 const ImageIcon = (props: React.SVGProps<SVGSVGElement>) => (
@@ -309,30 +198,6 @@ const MicIcon = (props: React.SVGProps<SVGSVGElement>) => (
     <line x1="12" y1="19" x2="12" y2="23" />
   </svg>
 )
-
-interface ToolItem {
-  id: string
-  name: string
-  shortName: string
-  icon: (props: React.SVGProps<SVGSVGElement>) => React.JSX.Element
-  extra?: string
-  /** Keep unfinished capabilities visible but unselectable. */
-  disabled?: boolean
-}
-
-const toolsList: ToolItem[] = [
-  { id: 'searchWeb', name: 'Web search', shortName: 'Search', icon: GlobeIcon },
-  { id: 'writeCode', name: 'Write or code', shortName: 'Write', icon: PencilIcon },
-  { id: 'draftDocument', name: 'Draft document', shortName: 'Draft', icon: PencilIcon },
-  {
-    id: 'deepResearch',
-    name: 'Research (multi-query, cited sources)',
-    shortName: 'Research',
-    icon: TelescopeIcon
-  },
-  { id: 'thinkLonger', name: 'Plan (written outline)', shortName: 'Plan', icon: LightbulbIcon },
-  { id: 'safeTools', name: 'Use safe tools (read-only)', shortName: 'Tools', icon: Settings2Icon }
-]
 
 export interface FileAttachment {
   kind: 'file'
@@ -427,19 +292,34 @@ interface PromptBoxProps extends React.TextareaHTMLAttributes<HTMLTextAreaElemen
   modelPicker?: React.ReactNode
   canSend?: boolean
   toolCallsAvailable?: boolean
+  intent?: ChatIntent
+  onIntentChange?: (intent: ChatIntent) => void
+  draftKind?: DraftKind
+  onDraftKindChange?: (kind: DraftKind) => void
 }
 
 // --- The Final, Self-Contained PromptBox Component ---
 export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
-  ({ className, onSubmitPrompt, isBusy, onStop, modelPicker, canSend = true, toolCallsAvailable = false, ...props }, ref) => {
+  ({ className, onSubmitPrompt, isBusy, onStop, modelPicker, canSend = true, toolCallsAvailable = false,
+    intent: intentProp, onIntentChange, draftKind: draftKindProp, onDraftKindChange, ...props }, ref) => {
     const internalTextareaRef = React.useRef<HTMLTextAreaElement>(null)
     const fileInputRef = React.useRef<HTMLInputElement>(null)
     const pendingTextFiles = React.useRef<File[]>([])
     const [value, setValue] = React.useState('')
     const [attachments, setAttachments] = React.useState<Attachment[]>([])
-    const [selectedTool, setSelectedTool] = React.useState<string | null>(null)
-    const [mode, setMode] = React.useState<ExecutionMode>('auto')
-    const [draftKind, setDraftKind] = React.useState<DraftKind>('research_brief')
+    const [internalIntent, setInternalIntent] = React.useState<ChatIntent>('auto')
+    const [internalDraftKind, setInternalDraftKind] = React.useState<DraftKind>('research_brief')
+    const intent = intentProp ?? internalIntent
+    const draftKind = draftKindProp ?? internalDraftKind
+    const { tool: selectedTool, mode } = requestForIntent(intent)
+    const setIntent = (next: ChatIntent): void => {
+      if (intentProp === undefined) setInternalIntent(next)
+      onIntentChange?.(next)
+    }
+    const setDraftKind = (next: DraftKind): void => {
+      if (draftKindProp === undefined) setInternalDraftKind(next)
+      onDraftKindChange?.(next)
+    }
     const [isPopoverOpen, setIsPopoverOpen] = React.useState(false)
     const [expandedImage, setExpandedImage] = React.useState<string | null>(null)
     const [isRecording, setIsRecording] = React.useState(false)
@@ -588,15 +468,17 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
         return
       }
       if (!canSend || (!value.trim() && attachments.length === 0)) return
+      if (intent === 'safeTools' && !toolCallsAvailable) {
+        setFileError('This model cannot use safe tools. Choose a supported model or another intent.')
+        return
+      }
       if (onSubmitPrompt) {
         onSubmitPrompt(value.trim(), selectedTool, attachments, mode, draftKind)
       }
       setValue('')
       setAttachments([])
       setFileError(null)
-      setSelectedTool(null)
-      setMode('auto')
-      setDraftKind('research_brief')
+      if (intent === 'generateImage') setIntent('auto')
       if (internalTextareaRef.current) {
         internalTextareaRef.current.style.height = 'auto'
       }
@@ -611,9 +493,7 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
     }
 
     const hasValue = value.trim().length > 0 || attachments.length > 0
-    const activeTool = selectedTool ? toolsList.find((t) => t.id === selectedTool) : null
-    const ActiveToolIcon = activeTool?.icon
-    const generatingImage = selectedTool === 'generateImage'
+    const generatingImage = intent === 'generateImage'
 
     return (
       <div
@@ -735,69 +615,26 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
               </Tooltip>
 
               <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <PopoverTrigger asChild>
-                      <button
-                        type="button"
-                        className="flex h-8 items-center gap-2 rounded-full px-2.5 text-xs text-foreground dark:text-white transition-colors hover:bg-accent dark:hover:bg-[#515151] focus-visible:outline-none focus-visible:ring-ring cursor-pointer border-2 border-[#e5e3df11]"
-                      >
-                        <Settings2Icon className="h-3.5 w-3.5 text-neutral-500" />
-                        {!selectedTool && <span>Tools</span>}
-                      </button>
-                    </PopoverTrigger>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" showArrow={true}>
-                    <p>Explore Tools</p>
-                  </TooltipContent>
-                </Tooltip>
-                <PopoverContent side="top" align="start">
-                  <div className="flex flex-col gap-3">
-                    {toolsList.map((tool) => (
-                      <button
-                        key={tool.id}
-                        disabled={tool.disabled || (tool.id === 'safeTools' && !toolCallsAvailable)}
-                        title={tool.id === 'safeTools' && !toolCallsAvailable ? 'Selected provider does not support tool calls' : tool.disabled ? 'Coming soon' : undefined}
-                        onClick={() => {
-                          if (tool.disabled || (tool.id === 'safeTools' && !toolCallsAvailable)) return
-                          setSelectedTool(tool.id)
-                          setIsPopoverOpen(false)
-                        }}
-                        className={cn(
-                          'flex w-full items-center gap-2 rounded-md p-2 text-left text-xs text-[#6E6D6A] dark:text-[#9E9D9A]',
-                          tool.disabled || (tool.id === 'safeTools' && !toolCallsAvailable)
-                            ? 'opacity-50 cursor-not-allowed'
-                            : 'hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] cursor-pointer hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3]'
-                        )}
-                      >
-                        <tool.icon className="h-3.5 w-3.5 text-neutral-500" />
-                        <span>{tool.name}</span>
-                        {tool.extra && (
-                          <span className="ml-auto text-[10px] text-muted-foreground dark:text-gray-400">
-                            {tool.extra}
-                          </span>
-                        )}
+                <PopoverTrigger asChild>
+                  <button type="button" aria-label={`Intent: ${INTENT_OPTIONS.find((option) => option.id === intent)?.label}`}
+                    className="flex h-8 items-center rounded-full border border-border px-3 text-xs text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring">
+                    {INTENT_OPTIONS.find((option) => option.id === intent)?.label}
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent side="top" align="start" aria-label="Choose chat intent">
+                  <div className="flex flex-col gap-1">
+                    {INTENT_OPTIONS.map((option) => (
+                      <button key={option.id} type="button" aria-pressed={intent === option.id}
+                        disabled={option.id === 'safeTools' && !toolCallsAvailable}
+                        title={option.id === 'safeTools' && !toolCallsAvailable ? 'Selected model cannot choose tools; use Web search or Research web' : undefined}
+                        onClick={() => { setIntent(option.id); setIsPopoverOpen(false); setFileError(null) }}
+                        className="rounded-md px-3 py-2 text-left text-xs text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50">
+                        {option.label}
                       </button>
                     ))}
                   </div>
                 </PopoverContent>
               </Popover>
-
-              {activeTool && (
-                <>
-                  <div className="h-4 w-px bg-border dark:bg-gray-600" />
-                  <button
-                    onClick={() => setSelectedTool(null)}
-                    className="flex h-8 items-center gap-2 rounded-full p-3 text-[14px] hover:bg-[#F1EFEA] dark:hover:bg-[#3b4045] border-2 border-[#e5e3df1e] text-[#2294ff] dark:text-[#99ceff] transition-colors cursor-pointer font-medium"
-                  >
-                    {ActiveToolIcon && <ActiveToolIcon className="h-3.5 w-3.5" />}
-                    <span>{activeTool.shortName}</span>
-                    <XIcon className="h-3 w-3" />
-                  </button>
-                </>
-              )}
-
-              <ModeSelector value={mode} onChange={setMode} />
 
               {/* Right-aligned buttons container */}
               <div className="ml-auto flex items-center gap-2">
@@ -806,7 +643,7 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => setSelectedTool(generatingImage ? null : 'generateImage')}
+                      onClick={() => setIntent(generatingImage ? 'auto' : 'generateImage')}
                       className={cn(
                         'flex h-8 w-8 items-center justify-center rounded-full transition-colors cursor-pointer',
                         generatingImage

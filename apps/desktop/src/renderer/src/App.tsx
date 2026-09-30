@@ -7,6 +7,7 @@ import About from '@/pages/About'
 import LockScreen from '@/components/LockScreen'
 import TitleBar from '@/components/TitleBar'
 import Onboarding from '@/components/Onboarding'
+import { cn } from '@/lib/utils'
 
 interface Profile {
   name: string
@@ -47,22 +48,28 @@ function App(): React.JSX.Element {
   return (
     <ThemeProvider attribute="class" defaultTheme="light" enableSystem={true}>
       <HashRouter>
-        <div className="flex flex-col h-screen w-full bg-[#FAF9F6] dark:bg-[#212121] text-[#2E2E2D] dark:text-white transition-colors duration-200 overflow-hidden">
-          <TitleBar />
+        <div
+          className={cn(
+            'relative flex flex-col h-screen w-full bg-[#FAF9F6] text-[#2E2E2D] dark:text-white transition-colors duration-200 overflow-hidden',
+            showOnboarding ? 'dark:bg-[#171717]' : 'dark:bg-[#212121]'
+          )}
+        >
+          <TitleBar transparent={showOnboarding} />
           <div className="flex-1 overflow-hidden relative flex flex-col">
             {locked === null || profile === null ? null : locked ? (
               <LockScreen onUnlock={() => setLocked(false)} />
-            ) : showOnboarding ? (
-              <Onboarding
-                onComplete={(name, avatarUrl) => setProfile({ name, avatarDataUrl: avatarUrl })}
-              />
-            ) : (
+            ) : showOnboarding ? null : (
               <Routes>
                 <Route path="/" element={<Home />} />
                 <Route path="/about" element={<About />} />
               </Routes>
             )}
           </div>
+          {showOnboarding && !locked && (
+            <Onboarding
+              onComplete={(name, avatarUrl) => setProfile({ name, avatarDataUrl: avatarUrl })}
+            />
+          )}
         </div>
       </HashRouter>
     </ThemeProvider>

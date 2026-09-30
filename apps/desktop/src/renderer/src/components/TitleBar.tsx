@@ -1,92 +1,62 @@
 import React from 'react'
 import SidebarIcon from '@/assets/icon/icon.png'
-export default function TitleBar(): React.JSX.Element {
-  const handleMinimize = (): void => {
-    window.api.minimizeWindow()
-  }
 
-  const handleMaximize = (): void => {
-    window.api.maximizeWindow()
-  }
-
-  const handleClose = (): void => {
-    window.api.closeWindow()
-  }
+export default function TitleBar({
+  transparent = false
+}: {
+  transparent?: boolean
+}): React.JSX.Element {
+  const controls = [
+    {
+      label: 'Close',
+      color: 'bg-[#ff5f57] border-[#e0443e]',
+      symbol: '×',
+      action: () => window.api.closeWindow()
+    },
+    {
+      label: 'Minimize',
+      color: 'bg-[#febc2e] border-[#dea123]',
+      symbol: '−',
+      action: () => window.api.minimizeWindow()
+    },
+    {
+      label: 'Maximize',
+      color: 'bg-[#28c840] border-[#1aab29]',
+      symbol: '+',
+      action: () => window.api.maximizeWindow()
+    }
+  ]
 
   return (
     <div
-      className="h-10 w-full flex items-center justify-between px-4 pt-2 bg-[#FAF9F6] dark:bg-[#171717] b text-[#2E2E2D] dark:text-[#EAE8E3] select-none shrink-0"
+      className={`relative z-20 h-10 w-full flex items-center gap-5 px-4 pt-2 text-[#2E2E2D] dark:text-[#EAE8E3] select-none shrink-0 ${transparent ? 'bg-transparent' : 'bg-[#FAF9F6] dark:bg-[#171717]'}`}
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
-      {/* Left side: Logo + Atlas title */}
       <div
         className="flex items-center gap-2"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        <img
-          src={SidebarIcon}
-          className="w-5 h-5 object-conver rounded-md shrink-0 items-center"
-          alt="Logo"
-        />
-        <span className="font-medium text-md tracking-tighter font-sans">Atlas</span>
+        {controls.map(({ label, color, symbol, action }) => (
+          <button
+            key={label}
+            type="button"
+            onClick={action}
+            aria-label={label}
+            title={label}
+            className="group grid size-7 place-items-center rounded-md focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-current"
+          >
+            <span
+              aria-hidden="true"
+              className={`grid size-3.5 place-items-center rounded-full border ${color} text-[11px] leading-none text-black/0 group-hover:text-black/60 group-focus-visible:text-black/60`}
+            >
+              {symbol}
+            </span>
+          </button>
+        ))}
       </div>
-
-      {/* Right side: Window management controls */}
-      <div
-        className="flex items-center h-full"
-        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-      >
-        {/* Minimize */}
-        <button
-          onClick={handleMinimize}
-          className="w-6 h-6 rounded-md flex items-center justify-center hover:bg-[#F1EFEA] dark:hover:bg-[#daffcb] transition-colors duration-150 cursor-pointer text-[#6E6D6A] dark:text-[#9E9D9A] hover:dark:text-[#000000]"
-          title="Minimize"
-        >
-          <svg
-            className="w-3.5 h-3.5"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
-
-        {/* Maximize */}
-        <button
-          onClick={handleMaximize}
-          className="w-6 h-6 rounded-md flex items-center justify-center hover:bg-[#F1EFEA] dark:hover:bg-[#ffe987] transition-colors duration-150 cursor-pointer text-[#6E6D6A] dark:text-[#757575] hover:dark:text-[#000000]"
-          title="Maximize"
-        >
-          <svg
-            className="w-3 h-3"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-          </svg>
-        </button>
-
-        {/* Close */}
-        <button
-          onClick={handleClose}
-          className="w-6 h-6 rounded-md flex items-center justify-center hover:bg-red-500 hover:text-white dark:hover:bg-red-600 transition-colors duration-150 cursor-pointer text-[#6E6D6A] dark:text-[#9E9D9A] hover:dark:text-[#000000]"
-          title="Close"
-        >
-          <svg
-            className="w-3.5 h-3.5"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
+      <div className="flex items-center gap-2 pointer-events-none">
+        <img src={SidebarIcon} className="size-5 object-contain rounded-md" alt="" />
+        <span className="font-medium text-md tracking-tighter font-sans">Atlas</span>
       </div>
     </div>
   )

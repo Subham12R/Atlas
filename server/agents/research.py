@@ -295,7 +295,9 @@ async def research_run(request: AgentTurnRequest, adapter, provider: str, model:
               'say when evidence is insufficient. ' + request.instructions + '\n' + memory)
     emit({'type': 'tool.progress', 'run_id': run_id, 'phase': 'writing answer'})
     images = [ImageInput(data=image.data, mime=image.mime) for image in request.images or []]
+    # The chat's turns reach only the answering model; queries above used at most 4 of them.
     messages = [TurnMessage(role='system', content=system),
+                *(TurnMessage(role=turn.role, content=turn.content) for turn in request.recent),
                 TurnMessage(role='evidence', content=evidence),
                 TurnMessage(role='user', content=request.prompt, images=images)]
     reply = await asyncio.wait_for(adapter.run_turn(messages, []),

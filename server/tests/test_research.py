@@ -94,6 +94,9 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, 'completed')
         self.assertNotIn('DO-NOT-SEARCH', planner.prompts[-1])
         self.assertNotIn('DO-NOT-SEARCH', ' '.join(calls))
+        # The answer (to the chosen model, not a search engine) keeps the chat's turns.
+        self.assertIn('Private background: DO-NOT-SEARCH', [m.content for m in writer.messages])
+        self.assertEqual([m.role for m in writer.messages], ['system', 'user', 'evidence', 'user'])
         self.assertEqual([e['type'] for e in events].count('plan.ready'), 2)
         self.assertIn('writing answer', [e['phase'] for e in events if e['type'] == 'tool.progress'])
 

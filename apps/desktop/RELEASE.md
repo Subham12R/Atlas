@@ -50,6 +50,7 @@ security warning.
 1. Download the `.dmg` and matching `.sha256` file from Assets below.
 2. Verify the download with `shasum -a 256 -c <downloaded-dmg>.sha256`.
 3. Open the DMG and drag Atlas to Applications.
-4. In Finder, Control-click Atlas, choose **Open**, then confirm **Open** in the warning dialog.
+4. Open Atlas from Applications. When macOS says it "could not verify" Atlas, click **Done** (not Move to Bin).
+5. Open **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway** next to the Atlas message, authenticate, then click **Open**. This is needed once per install. (On macOS 14 and earlier, Control-click Atlas and choose **Open** instead.)
 
 Only bypass Gatekeeper for a build downloaded from the official Atlas repository. This release is for Apple Silicon Macs; it does not include automatic updates.

@@ -3,3 +3,4 @@
 /.release-stage/
 /.server-build/
 /.asar-work/
+.DS_Store

@@ -48,7 +48,9 @@ from factory import (ANON_OK, BRAIN_ENABLED, BRAIN_TOPK, IMAGE_GEN_MODELS,
                      IMAGE_GEN_PROVIDERS, MODELS, PROVIDERS, AuthMissing,
                      build_adapter, build_brain, get_embedder, get_store)
 from policy import ExecutionMode, ExecutionPolicy, ModelCandidate
-from routing import choose_model, is_loopback_endpoint
+from routing import is_loopback_endpoint
+from auto_route import route_turn as auto_route_turn
+from reasoning import ReasoningLevel
 from brain.documents import Documents
 
 TAVILY_KEY = "TAVILY_API_KEY"
@@ -119,38 +121,55 @@ class TurnRouteRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=10000)
     mode: ExecutionMode = ExecutionMode.AUTO
     preference: ModelPreference | None = None
+    # Auto may use configured cloud providers only when the user opted in.
+    allow_cloud: bool = False
+    # Exact level for a picked model; the ceiling when Auto picks the model.
+    reasoning: ReasoningLevel = 'medium'
+    agent_mode: Literal['chat', 'search_web', 'research', 'plan', 'write', 'draft', 'tools'] = 'chat'
+
+
+_CLOUD_ORDER = ('openai', 'anthropic', 'gemini', 'openrouter')  # Stable; no quality/price claims.
+_TOOL_CAPABILITIES = {'openai': OpenAIAdapter.capabilities, 'anthropic': AnthropicAdapter.capabilities,
+                      'gemini': GeminiAdapter.capabilities}
+
+
+def _candidate(provider: str, model: str, is_local: bool) -> ModelCandidate:
+    capabilities = {'research', 'coding', 'documentation'}
+    tools = _TOOL_CAPABILITIES.get(provider)
+    if tools and tools.tool_calls and (not tools.supported_models or model in tools.supported_models):
+        capabilities.add('tools')
+    return ModelCandidate(provider, model, frozenset(capabilities), is_local)
+
+
+def _cloud_default(provider: str) -> str:
+    if provider == 'openrouter':
+        return credentials_store.get_value('OPENROUTER_MODEL') or OPENROUTER_DEFAULT_MODEL
+    return {'openai': OPENAI_DEFAULT_MODEL, 'anthropic': ANTHROPIC_DEFAULT_MODEL,
+            'gemini': GEMINI_DEFAULT_MODEL}[provider]
 
 
 @app.post('/routing/turn')
 async def route_turn(body: TurnRouteRequest):
-    # Cloud requires a named, configured model preference; never silently fall back to it.
+    # Cloud needs a named, configured preference or explicit Auto opt-in; never a silent fallback.
     preference = ((body.preference.provider, body.preference.model)
                   if body.preference else None)
+    cloud_preference = bool(preference and preference[0] != 'local')
     candidates = []
-    if preference and preference[0] != 'local':
-        provider = preference[0]
-        if credentials_store.get_value(PROVIDER_ENV_KEYS[provider]):
-            defaults = {'openai': OPENAI_DEFAULT_MODEL, 'anthropic': ANTHROPIC_DEFAULT_MODEL,
-                        'gemini': GEMINI_DEFAULT_MODEL, 'openrouter': OPENROUTER_DEFAULT_MODEL}
-            model = (credentials_store.get_value('OPENROUTER_MODEL') or defaults[provider]
-                     if provider == 'openrouter' else defaults[provider])
-            candidates.append(ModelCandidate(provider, model,
-                                             frozenset({'research', 'coding', 'documentation'}), False))
-            preference = (provider, preference[1] or model)
-    else:
+    if not cloud_preference:
         base_url = _local_base_url()
         local_model = credentials_store.get_value('LOCAL_LLM_MODEL')
         models = ([local_model] if local_model else await _discover_local_models(base_url)) \
             if is_loopback_endpoint(base_url) else []
-        candidates = [ModelCandidate('local', model,
-                                     frozenset({'research', 'coding', 'documentation'}), True)
-                      for model in models if model and not re.search(
-                          r'(embedding|embed-|unlimited-ocr|\bocr\b)', model, re.I)]
-    decision = choose_model(body.prompt, body.mode, candidates,
-                            ExecutionPolicy(allow_cloud=bool(preference and preference[0] != 'local')),
-                            preference)
-    return {'state': decision.state, 'mode': decision.mode, 'provider': decision.provider,
-            'model': decision.model, 'reason': decision.reason}
+        candidates = [_candidate('local', model, True) for model in models if model and not re.search(
+            r'(embedding|embed-|unlimited-ocr|\bocr\b)', model, re.I)]
+    cloud = ([preference[0]] if cloud_preference else
+             _CLOUD_ORDER if body.allow_cloud and not preference else ())
+    candidates += [_candidate(provider, _cloud_default(provider), False) for provider in cloud
+                   if credentials_store.get_value(PROVIDER_ENV_KEYS[provider])]
+    return auto_route_turn(body.prompt, body.mode, body.agent_mode, candidates,
+                           ExecutionPolicy(allow_cloud=cloud_preference or body.allow_cloud),
+                           preference, body.reasoning,
+                           bool(credentials_store.get_value(TAVILY_KEY)))
 
 
 class SessionCreate(BaseModel):
@@ -168,6 +187,12 @@ class Message(BaseModel):
     prompt: str
     images: list[ImagePayload] | None = None
     mode: ExecutionMode = ExecutionMode.AUTO
+    reasoning: ReasoningLevel | None = None
+
+
+def _set_reasoning(adapter, level: str | None) -> None:
+    """Applies to the chat writer, never to Brain's separate summarizer."""
+    getattr(adapter, 'adapter', adapter).reasoning = level
 
 
 class ChatOnce(BaseModel):
@@ -630,6 +655,7 @@ async def send_message(sid: str, body: Message):
     adapter, lock = _get(sid)
     _check_auto_session(body.mode, adapter)
     async with lock:
+        _set_reasoning(adapter, body.reasoning)
         try:
             reply = await adapter.send(body.prompt, _images(body.images))
         except Exception as e:
@@ -644,6 +670,7 @@ async def send_message_stream(sid: str, body: Message):
 
     async def event_generator():
         async with lock:
+            _set_reasoning(adapter, body.reasoning)
             try:
                 async for token in adapter.send_stream(body.prompt, _images(body.images)):
                     if isinstance(token, dict):
@@ -678,6 +705,7 @@ async def agent_stream(sid: str, body: AgentTurnRequest, request: Request):
                     queue.put_nowait(validated.model_dump(exclude_none=True))
 
                 try:
+                    _set_reasoning(adapter, body.reasoning)
                     provider = adapter.provider if hasattr(adapter, 'provider') else adapter.name
                     model = getattr(adapter.adapter if hasattr(adapter, 'adapter') else adapter,
                                     'model', None)

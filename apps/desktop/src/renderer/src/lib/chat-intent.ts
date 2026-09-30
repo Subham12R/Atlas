@@ -16,7 +16,7 @@ export const INTENT_OPTIONS: { id: ChatIntent; label: string }[] = [
   { id: 'coding', label: 'Coding' },
   { id: 'documentation', label: 'Documentation' },
   { id: 'searchWeb', label: 'Web search' },
-  { id: 'deepResearch', label: 'Research web' },
+  { id: 'deepResearch', label: 'Research' },
   { id: 'plan', label: 'Plan' },
   { id: 'draftDocument', label: 'Draft document' },
   { id: 'safeTools', label: 'Safe tools' },

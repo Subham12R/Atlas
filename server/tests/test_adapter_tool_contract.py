@@ -32,7 +32,8 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mock.call_args.kwargs['tools'][0]['function']['name'], 'web_search')
         await adapter.run_turn([TurnMessage(role='assistant', calls=turn.calls),
                                 TurnMessage(role='tool', tool_call_id='call1', content='result')], TOOLS)
-        self.assertEqual(adapter._messages[-2]['tool_call_id'], 'call1')
+        self.assertEqual(mock.call_args.kwargs['messages'][-1]['tool_call_id'], 'call1')
+        self.assertEqual(adapter._messages, [])
         await adapter.close()
 
     async def test_openai_maps_plain_text_and_multiple_calls(self):
@@ -48,6 +49,49 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         turn = await adapter.run_turn([TurnMessage(role='user', content='q')], TOOLS)
         self.assertEqual([call.id for call in turn.calls], ['one', 'two'])
         await adapter.close()
+
+    async def test_local_stream_timeout_does_not_poison_followup_history(self):
+        adapter = LocalAdapter(base_url='http://127.0.0.1:11434/v1', model='fixture')
+        calls = []
+        async def create(**kwargs):
+            calls.append(kwargs['messages'])
+            async def chunks():
+                yield NS(choices=[NS(delta=NS(content='partial' if len(calls) == 2 else 'done'))])
+                if len(calls) == 2:
+                    raise TimeoutError('local model stalled')
+            return chunks()
+        adapter._client.chat.completions.create = create
+        try:
+            self.assertEqual([part async for part in adapter.send_stream('first')], ['done'])
+            with self.assertRaises(TimeoutError):
+                [part async for part in adapter.send_stream('failed follow-up')]
+            self.assertEqual([part async for part in adapter.send_stream('next')], ['done'])
+            self.assertEqual([(part['role'], part['content']) for part in calls[-1]],
+                             [('user', 'first'), ('assistant', 'done'), ('user', 'next')])
+        finally:
+            await adapter.close()
+
+    async def test_agent_turn_does_not_replace_local_chat_history(self):
+        adapter = LocalAdapter(base_url='http://127.0.0.1:11434/v1', model='fixture')
+        calls = []
+        async def create(**kwargs):
+            calls.append(kwargs['messages'])
+            if kwargs.get('stream'):
+                async def chunks():
+                    yield NS(choices=[NS(delta=NS(content='done', tool_calls=None), finish_reason='stop')])
+                return chunks()
+            return NS(choices=[NS(message=NS(content='plan', tool_calls=None), finish_reason='stop')])
+        adapter._client.chat.completions.create = create
+        try:
+            [part async for part in adapter.send_stream('initial subject')]
+            await adapter.run_turn([TurnMessage(role='system', content='Agent instruction'),
+                                    TurnMessage(role='user', content='Plan it')], [])
+            [part async for part in adapter.send_stream('follow-up')]
+            self.assertEqual([(part['role'], part['content']) for part in calls[-1]],
+                             [('user', 'initial subject'), ('assistant', 'done'),
+                              ('user', 'follow-up')])
+        finally:
+            await adapter.close()
 
     async def test_openai_rejects_unsupported_response_shape(self):
         adapter = OpenAIAdapter('fake')
@@ -70,7 +114,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         events = [e async for e in adapter.stream_turn([TurnMessage(role='user', content='q')], TOOLS)]
         self.assertEqual(json.loads(events[0].call.arguments), {'query': 'q'})
         self.assertEqual(events[-1].stop_reason, 'tool_calls')
-        self.assertEqual(adapter._messages[-1]['tool_calls'][0]['id'], 'c1')
+        self.assertEqual(adapter._messages, [])
         await adapter.close()
 
     async def test_anthropic_maps_native_tool_use(self):

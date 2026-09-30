@@ -4,6 +4,7 @@ import Home from './Home'
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  localStorage.clear()
   Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
 })
 
@@ -22,13 +23,15 @@ it('keeps one intent across first-turn remount and later sends, but starts a new
       ? { local: { configured: true, runtime: 'ollama' } }
       : path === '/settings/providers/local/models'
         ? { runtime: 'ollama', models: ['installed:7b'] }
-        : path === '/sessions'
-          ? { session_id: 'session-1', provider: 'local', thread_id: null }
-          : null), { headers: { 'Content-Type': 'application/json' } })
+        : path === '/routing/turn'
+          ? { state: 'ready', mode: 'coding', provider: 'local', model: 'installed:7b', reason: 'explicit mode' }
+          : path === '/sessions'
+            ? { session_id: 'session-1', provider: 'local', thread_id: null }
+            : null), { headers: { 'Content-Type': 'application/json' } })
   })
   vi.stubGlobal('fetch', fetch)
   render(<Home />)
-  await screen.findByRole('button', { name: 'Model: installed:7b' })
+  await screen.findByRole('button', { name: 'Model: Auto' })
   fireEvent.click(screen.getByRole('button', { name: 'Intent: Auto' }))
   fireEvent.click(screen.getByRole('button', { name: 'Coding' }))
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'First' } })
@@ -57,11 +60,50 @@ it('does not dispatch automatic image requests to a text-only provider', async (
   ), { headers: { 'Content-Type': 'application/json' } }))
   vi.stubGlobal('fetch', fetch)
   render(<Home />)
-  await screen.findByRole('button', { name: 'Model: installed:7b' })
+  await screen.findByRole('button', { name: 'Model: Auto' })
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Generate an image of a moon' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
   expect(await screen.findByText(/Image generation requires OpenAI or Gemini/)).toBeTruthy()
   expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/images/generate'))).toBe(false)
+})
+
+it('replays bounded same-chat context when a stored session has expired', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  const stored = { id: 'old-chat', title: 'Previous session', isPinned: false, timestamp: '',
+    provider: 'local', model: 'installed:7b', sessionId: 'stale', threadId: 'old-thread', messages: [
+      { id: 'u1', sender: 'user', content: 'Our project label is silverpine.', timestamp: '' },
+      { id: 'a1', sender: 'assistant', content: 'silverpine is the label.', timestamp: '' },
+      { id: 'u2', sender: 'user', content: 'Check again', timestamp: '' },
+      { id: 'e2', sender: 'assistant', content: '**Error:** The agent run timed out. Try again.', timestamp: '' }
+    ] }
+  vi.stubGlobal('api', {
+    getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }),
+    getChats: async () => [stored], getProfile: async () => ({ name: '', avatarDataUrl: null }),
+    setChats: async () => {}
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+    const path = new URL(String(input)).pathname
+    if (path === '/sessions/stale/messages/stream') return new Response(JSON.stringify({ detail: 'no such session' }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+    if (path === '/sessions/new-session/messages/stream') return new Response('data: {"text":"silverpine"}\n\n')
+    return new Response(JSON.stringify(path === '/settings/providers'
+      ? { local: { configured: true, runtime: 'ollama' } }
+      : path === '/settings/providers/local/models'
+        ? { runtime: 'ollama', models: ['installed:7b'] }
+        : path === '/routing/turn'
+          ? { state: 'ready', mode: 'documentation', provider: 'local', model: 'installed:7b', reason: 'fixture' }
+          : { session_id: 'new-session', provider: 'local', thread_id: 'new-thread' }),
+    { headers: { 'Content-Type': 'application/json' } })
+  })
+  vi.stubGlobal('fetch', fetch)
+  render(<Home />)
+  fireEvent.click(await screen.findByText('Previous session'))
+  fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'What label did we choose?' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/sessions/new-session/messages/stream'))).toBe(true))
+  const retry = fetch.mock.calls.find(([url]) => String(url).endsWith('/sessions/new-session/messages/stream'))
+  const prompt = JSON.parse(String(retry?.[1]?.body)).prompt
+  expect(prompt).toContain('silverpine is the label')
+  expect(prompt).not.toContain('The agent run timed out')
 })
 
 it('routes Auto locally before creating a session and records the decision', async () => {
@@ -88,7 +130,7 @@ it('routes Auto locally before creating a session and records the decision', asy
   })
   vi.stubGlobal('fetch', fetch)
   render(<Home />)
-  await screen.findByRole('button', { name: 'Model: installed:7b' })
+  await screen.findByRole('button', { name: 'Model: Auto' })
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Fix this function' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
   await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/messages/stream'))).toBe(true))
@@ -97,6 +139,10 @@ it('routes Auto locally before creating a session and records the decision', asy
   const routeIndex = fetch.mock.calls.findIndex(([url]) => String(url).endsWith('/routing/turn'))
   const sessionIndex = fetch.mock.calls.findIndex(([url]) => String(url).endsWith('/sessions'))
   expect(routeIndex).toBeLessThan(sessionIndex)
+  expect(JSON.parse(String(fetch.mock.calls[routeIndex]?.[1]?.body))).toMatchObject({
+    allow_cloud: false, reasoning: 'medium', agent_mode: 'chat'
+  })
+  expect(JSON.parse(String(fetch.mock.calls[routeIndex]?.[1]?.body)).preference).toBeUndefined()
   expect(await screen.findByText(/deterministic text classification/)).toBeTruthy()
 })
 
@@ -127,8 +173,7 @@ it('uses an explicitly selected cloud model in Auto without falling back to loca
   })
   vi.stubGlobal('fetch', fetch)
   render(<Home />)
-  await screen.findByRole('button', { name: 'Model: OpenAI' })
-  fireEvent.click(screen.getByRole('button', { name: 'Model: OpenAI' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Model: Auto' }))
   fireEvent.click(screen.getByRole('button', { name: 'OpenAI' }))
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Fix this function' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
@@ -170,7 +215,7 @@ it('does not open a session when Auto has no permitted model', async () => {
   })
   vi.stubGlobal('fetch', fetch)
   render(<Home />)
-  await screen.findByRole('button', { name: 'Model: installed:7b' })
+  await screen.findByRole('button', { name: 'Model: Auto' })
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Fix this function' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
   await screen.findByText(/No permitted text model/)
@@ -192,16 +237,18 @@ it('sends the chosen mode on the actual streamed turn request', async () => {
         ? { local: { configured: true, runtime: 'ollama' } }
         : path === '/settings/providers/local/models'
           ? { runtime: 'ollama', models: [] }
-          : path === '/sessions'
-            ? { session_id: 'session-1', provider: 'local', thread_id: null }
-            : null
+          : path === '/routing/turn'
+            ? { state: 'ready', mode: 'coding', provider: 'local', model: 'llama3.2', reason: 'explicit mode' }
+            : path === '/sessions'
+              ? { session_id: 'session-1', provider: 'local', thread_id: null }
+              : null
     if (path.endsWith('/messages/stream')) return new Response('data: {"text":"Done"}\n\n')
     return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } })
   })
   vi.stubGlobal('fetch', fetch)
   render(<Home />)
 
-  await waitFor(() => expect(screen.getByText('Local model')).toBeTruthy())
+  await screen.findByRole('button', { name: 'Model: Auto' })
   fireEvent.click(screen.getByRole('button', { name: 'Intent: Auto' }))
   fireEvent.click(screen.getByRole('button', { name: 'Coding' }))
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), {
@@ -214,4 +261,81 @@ it('sends the chosen mode on the actual streamed turn request', async () => {
     expect(stream).toBeDefined()
     expect(JSON.parse(String(stream?.[1]?.body))).toMatchObject({ mode: 'coding' })
   })
+})
+
+it('restores the original reply when an in-place retry fails', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', {
+    getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }),
+    getChats: async () => [{
+      id: 'c1', title: 'Retry chat', isPinned: false, timestamp: '', provider: 'local', model: 'installed:7b',
+      sessionId: 'session-1', threadId: null,
+      messages: [
+        { id: 'u1', sender: 'user', timestamp: '', content: 'Question',
+          request: { tool: null, mode: 'coding', draftKind: 'research_brief', provider: 'local', model: 'installed:7b', reasoning: 'high', allowCloud: false } },
+        { id: 'a1', sender: 'assistant', timestamp: '', content: 'Original answer' }
+      ]
+    }],
+    getProfile: async () => ({ name: '', avatarDataUrl: null }),
+    setChats: async () => {}
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+    const path = new URL(String(input)).pathname
+    if (path.endsWith('/messages/stream')) return new Response('boom', { status: 500 })
+    return new Response(JSON.stringify(path === '/settings/providers'
+      ? { local: { configured: true, runtime: 'ollama' } }
+      : path === '/settings/providers/local/models'
+        ? { runtime: 'ollama', models: ['installed:7b'] }
+        : null), { headers: { 'Content-Type': 'application/json' } })
+  })
+  vi.stubGlobal('fetch', fetch)
+  render(<Home />)
+  fireEvent.click(await screen.findByText('Retry chat'))
+  await screen.findByRole('button', { name: 'Model: installed:7b' })
+  fireEvent.click(await screen.findByRole('button', { name: 'Retry response' }))
+  await screen.findByText(/Retry failed, showing the original reply/)
+  expect(screen.getByText('Original answer')).toBeTruthy()
+  const stream = fetch.mock.calls.find(([url]) => String(url).endsWith('/messages/stream'))
+  expect(JSON.parse(String(stream?.[1]?.body))).toMatchObject({ mode: 'coding', reasoning: 'high' })
+  expect(screen.getAllByText('Question')).toHaveLength(1)
+})
+
+it('follows an Auto tool call and sends the routed reasoning level', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  localStorage.setItem('atlas.reasoning', 'max')
+  vi.stubGlobal('api', {
+    getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }),
+    getChats: async () => [],
+    getProfile: async () => ({ name: '', avatarDataUrl: null }),
+    setChats: async () => {}
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+    const path = new URL(String(input)).pathname
+    if (path.endsWith('/agent/stream')) {
+      return new Response('data: {"type":"assistant.delta","text":"Fresh"}\n\ndata: {"type":"run.completed","status":"completed"}\n\n')
+    }
+    return new Response(JSON.stringify(path === '/settings/providers'
+      ? { local: { configured: true, runtime: 'ollama' } }
+      : path === '/settings/providers/local/models'
+        ? { runtime: 'ollama', models: ['installed:7b'] }
+        : path === '/routing/turn'
+          ? { state: 'ready', mode: 'documentation', provider: 'local', model: 'installed:7b',
+              reason: 'needs current web info', tool: 'searchWeb', reasoning: 'low' }
+          : path === '/sessions'
+            ? { session_id: 'session-1', provider: 'local', thread_id: null }
+            : null), { headers: { 'Content-Type': 'application/json' } })
+  })
+  vi.stubGlobal('fetch', fetch)
+  render(<Home />)
+  await screen.findByRole('button', { name: 'Model: Auto' })
+  fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Latest news on the merger' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+  await screen.findByText('Fresh')
+  const route = fetch.mock.calls.find(([url]) => String(url).endsWith('/routing/turn'))
+  expect(JSON.parse(String(route?.[1]?.body))).toMatchObject({ reasoning: 'max' })
+  const agent = fetch.mock.calls.find(([url]) => String(url).endsWith('/agent/stream'))
+  expect(JSON.parse(String(agent?.[1]?.body))).toMatchObject({ mode: 'search_web', reasoning: 'low' })
+  expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/messages/stream'))).toBe(false)
+  // Settled (Retry only shows once sending ends), so no effect fires after teardown.
+  await screen.findByRole('button', { name: 'Retry response' })
 })

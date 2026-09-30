@@ -6,7 +6,12 @@ keeps its own conversation handle.
 """
 from __future__ import annotations
 
-from openai import AsyncOpenAI
+import logging
+import re
+
+from openai import AsyncOpenAI, BadRequestError
+
+from reasoning import openai_effort
 
 from .base import (AdapterCapabilities, AdapterEvent, AdapterTurn, BaseAdapter,
                    ImageInput, Reply, ToolCall, TurnMessage)
@@ -35,6 +40,7 @@ class OpenAIAdapter(BaseAdapter):
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self._messages: list[dict] = []
         self.debug = debug
+        self._reasoning_rejected = False
 
     capabilities = AdapterCapabilities(tool_calls=True, streamed_arguments=True,
                                        supported_models=('gpt-4o', 'gpt-4o-mini', 'o4-mini'))
@@ -62,12 +68,30 @@ class OpenAIAdapter(BaseAdapter):
     def _tools(tools: list[dict]) -> list[dict]:
         return [{'type': 'function', 'function': tool} for tool in tools]
 
+    def _reasoning_kwargs(self) -> dict:
+        effort = openai_effort(self.model, self.reasoning)
+        return {'reasoning_effort': effort} if effort else {}
+
+    async def _create(self, **kwargs):
+        """One bounded retry without the reasoning parameter if the model rejects it."""
+        extra = {} if self._reasoning_rejected else self._reasoning_kwargs()
+        try:
+            return await self._client.chat.completions.create(**kwargs, **extra)
+        except BadRequestError as error:
+            if not extra or not re.search(r'reason|think|effort', str(error), re.I):
+                raise
+            # ponytail: sticky per session; clear it if users switch models mid-session.
+            self._reasoning_rejected = True
+            logging.getLogger(__name__).warning('%s rejected reasoning control; retrying without it',
+                                                self.model)
+            return await self._client.chat.completions.create(**kwargs)
+
     async def run_turn(self, messages: list[TurnMessage], tools: list[dict]) -> AdapterTurn:
-        self._messages = self._turn_messages(messages)
-        kwargs = {'model': self.model, 'messages': self._messages}
+        # Agent turns supply their own context; never replace the session chat history.
+        kwargs = {'model': self.model, 'messages': self._turn_messages(messages)}
         if tools:
             kwargs['tools'] = self._tools(tools)
-        response = await self._client.chat.completions.create(**kwargs)
+        response = await self._create(**kwargs)
         choices = getattr(response, 'choices', None)
         if not choices or getattr(choices[0], 'message', None) is None:
             raise ValueError('OpenAI returned no usable response')
@@ -76,14 +100,6 @@ class OpenAIAdapter(BaseAdapter):
         calls = tuple(ToolCall(id=c.id, name=c.function.name,
                                arguments=c.function.arguments)
                       for c in (message.tool_calls or []))
-        assistant = {'role': 'assistant', 'content': message.content or None}
-        if calls:
-            assistant['tool_calls'] = [{'id': c.id, 'type': 'function', 'function': {
-                'name': c.name, 'arguments': c.arguments
-            }} for c in calls]
-        else:
-            assistant['content'] = message.content or ''
-        self._messages.append(assistant)
         return AdapterTurn(text=message.content or '', calls=calls,
                            stop_reason=choice.finish_reason or 'stop')
 
@@ -92,16 +108,14 @@ class OpenAIAdapter(BaseAdapter):
         kwargs = {'model': self.model, 'messages': native, 'stream': True}
         if tools:
             kwargs['tools'] = self._tools(tools)
-        stream = await self._client.chat.completions.create(**kwargs)
+        stream = await self._create(**kwargs)
         calls: dict[int, dict] = {}
-        text_parts = []
         stop_reason = 'stop'
         async for chunk in stream:
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
             if choice.delta.content:
-                text_parts.append(choice.delta.content)
                 yield AdapterEvent(kind='text.delta', text=choice.delta.content)
             for part in choice.delta.tool_calls or []:
                 call = calls.setdefault(part.index, {'id': '', 'name': '', 'arguments': ''})
@@ -122,33 +136,25 @@ class OpenAIAdapter(BaseAdapter):
             completed = ToolCall(**call)
             completed_calls.append(completed)
             yield AdapterEvent(kind='tool.call', call=completed)
-        assistant = {'role': 'assistant', 'content': ''.join(text_parts) or None}
-        if completed_calls:
-            assistant['tool_calls'] = [{'id': call.id, 'type': 'function', 'function': {
-                'name': call.name, 'arguments': call.arguments
-            }} for call in completed_calls]
-        self._messages = [*native, assistant]
         yield AdapterEvent(kind='turn.final', stop_reason=stop_reason)
 
     async def init(self) -> None:
         pass
 
     async def send(self, prompt: str, images: list[ImageInput] | None = None) -> Reply:
-        self._messages.append({"role": "user", "content": _content(prompt, images)})
-        resp = await self._client.chat.completions.create(
-            model=self.model, messages=self._messages,
-        )
+        messages = [*self._messages, {"role": "user", "content": _content(prompt, images)}]
+        resp = await self._create(model=self.model, messages=messages)
         text = resp.choices[0].message.content or ""
-        self._messages.append({"role": "assistant", "content": text})
+        if not text.strip():
+            raise ValueError('model returned no text')
+        self._messages = [*messages, {"role": "assistant", "content": text}]
         return Reply(text=text, provider=self.name,
                      meta={"model": resp.model,
                            "usage": resp.usage.model_dump() if resp.usage else None})
 
     async def send_stream(self, prompt: str, images: list[ImageInput] | None = None):
-        self._messages.append({"role": "user", "content": _content(prompt, images)})
-        resp = await self._client.chat.completions.create(
-            model=self.model, messages=self._messages, stream=True
-        )
+        messages = [*self._messages, {"role": "user", "content": _content(prompt, images)}]
+        resp = await self._create(model=self.model, messages=messages, stream=True)
         text_chunks = []
         async for chunk in resp:
             content = chunk.choices[0].delta.content or ""
@@ -157,7 +163,9 @@ class OpenAIAdapter(BaseAdapter):
                 yield content
         
         full_text = "".join(text_chunks)
-        self._messages.append({"role": "assistant", "content": full_text})
+        if not full_text.strip():
+            raise ValueError('model returned no text')
+        self._messages = [*messages, {"role": "assistant", "content": full_text}]
 
     async def close(self) -> None:
         await self._client.close()

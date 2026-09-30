@@ -305,6 +305,7 @@ All knobs live in `.env` (see `server/.env.example`):
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `ATLAS_LOCAL_AGENT_TIMEOUT_SECONDS` | `180` | Local agent/research deadline (90–300 seconds); slow models may still time out |
 | `BRAIN_ENABLED` | `1` | `0` = plain adapters, no memory |
 | `BRAIN_AUTO_SUMMARY` | `1` | `0` = RAG only (no LLM summary/graph, saves quota) |
 | `BRAIN_SUMMARIZER` | `openai` | Provider used for summary + graph extraction |

@@ -30,6 +30,18 @@ async def echo(ctx, params):
 
 
 class LoopTests(unittest.IsolatedAsyncioTestCase):
+    def test_agent_timeout_is_bounded_and_local_is_calibratable(self):
+        from agents.research import agent_timeout_seconds
+        from unittest.mock import patch
+        self.assertEqual(agent_timeout_seconds('openai'), 90)
+        self.assertEqual(agent_timeout_seconds('local'), 180)
+        with patch.dict('os.environ', {'ATLAS_LOCAL_AGENT_TIMEOUT_SECONDS': '240'}):
+            self.assertEqual(agent_timeout_seconds('local'), 240)
+        with patch.dict('os.environ', {'ATLAS_LOCAL_AGENT_TIMEOUT_SECONDS': '99999'}):
+            self.assertEqual(agent_timeout_seconds('local'), 300)
+        with patch.dict('os.environ', {'ATLAS_LOCAL_AGENT_TIMEOUT_SECONDS': 'bad'}):
+            self.assertEqual(agent_timeout_seconds('local'), 180)
+
     def context(self, cancelled=False):
         event = asyncio.Event()
         if cancelled: event.set()

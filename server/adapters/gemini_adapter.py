@@ -8,6 +8,8 @@ import uuid
 from google import genai
 from google.genai import types
 
+from reasoning import gemini_thinking
+
 from .base import (AdapterCapabilities, AdapterTurn, BaseAdapter, ImageInput,
                    Reply, ToolCall, TurnMessage)
 
@@ -67,14 +69,16 @@ class GeminiAdapter(BaseAdapter):
                 parts.append(types.Part.from_text(text=text))
                 contents.append(types.Content(role=role, parts=parts))
         kwargs = {'model': self.model, 'contents': contents}
-        if system or tools:
+        thinking = self._thinking_config()
+        if system or tools or thinking:
             declarations = [types.FunctionDeclaration(name=t['name'],
                             description=t['description'],
                             parameters_json_schema=t['parameters']) for t in tools]
             kwargs['config'] = types.GenerateContentConfig(
                 system_instruction=system or None,
                 tools=[types.Tool(function_declarations=declarations)] if declarations else None,
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                thinking_config=thinking)
         if not contents:
             raise ValueError('Gemini turn requires at least one message')
         config = kwargs.get('config')
@@ -96,16 +100,25 @@ class GeminiAdapter(BaseAdapter):
         return AdapterTurn(text=''.join(text), calls=tuple(calls),
                            stop_reason=str(response.candidates[0].finish_reason or 'stop'))
 
+    def _thinking_config(self):
+        thinking = gemini_thinking(self.model, self.reasoning)
+        return types.ThinkingConfig(**thinking) if thinking else None
+
+    def _chat_config(self):
+        thinking = self._thinking_config()
+        return types.GenerateContentConfig(thinking_config=thinking) if thinking else None
+
     async def init(self) -> None:
         pass
 
     async def send(self, prompt: str, images: list[ImageInput] | None = None) -> Reply:
-        resp = await self._chat.send_message(_content(prompt, images))
+        resp = await self._chat.send_message(_content(prompt, images), config=self._chat_config())
         text = resp.text or ""
         return Reply(text=text, provider=self.name, meta={"model": self.model})
 
     async def send_stream(self, prompt: str, images: list[ImageInput] | None = None):
-        resp = await self._chat.send_message_stream(_content(prompt, images))
+        resp = await self._chat.send_message_stream(_content(prompt, images),
+                                                    config=self._chat_config())
         async for chunk in resp:
             text = chunk.text or ""
             if text:

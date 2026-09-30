@@ -8,6 +8,7 @@ import {
   type DocumentHit,
   type IndexedDocument
 } from '@/lib/api'
+import { ContextCard } from '@/components/ai/context-card'
 
 const MAX_BYTES = 1024 * 1024
 
@@ -154,19 +155,15 @@ export default function DocumentLibrary(): React.JSX.Element {
           Search documents
         </button>
       </form>
-      <ul className="space-y-2">
+      <ul className="grid gap-2 sm:grid-cols-2">
         {results.map((hit) => (
-          <li
-            key={hit.chunk_id}
-            className="rounded border border-[#E5E3DF] p-2 text-xs dark:border-[#4d4d4d]"
-          >
-            <span className="font-medium">
-              {hit.name} · chunk {hit.chunk_id}
-            </span>
-            <span className="ml-2 text-muted-foreground">
-              ID {hit.source_id.slice(0, 8)} · score {hit.score.toFixed(3)}
-            </span>
-            <p className="mt-1 line-clamp-3">{hit.text}</p>
+          <li key={`${hit.source_id}-${hit.chunk_id}`}>
+            <ContextCard
+              label={`${hit.name} · chunk ${hit.chunk_id}`}
+              meta={`ID ${hit.source_id.slice(0, 8)} · score ${hit.score.toFixed(3)}`}
+            >
+              {hit.text}
+            </ContextCard>
           </li>
         ))}
       </ul>

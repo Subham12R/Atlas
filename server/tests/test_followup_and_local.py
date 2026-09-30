@@ -103,5 +103,66 @@ class BudgetAndMemoryTests(unittest.TestCase):
         self.assertTrue(all(line.startswith(('-', '[')) for line in text.splitlines()))
 
 
+def _response(content, reasoning='', finish='stop'):
+    from types import SimpleNamespace as NS
+    message = NS(content=content, tool_calls=None, reasoning_content=reasoning)
+    return NS(choices=[NS(message=message, finish_reason=finish)])
+
+
+class EmptyAnswerRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_thinking_only_reply_is_retried_without_reasoning(self):
+        from adapters.base import TurnMessage
+        from adapters.local_adapter import LocalAdapter
+        adapter = LocalAdapter(model='qwen')
+        calls = []
+
+        async def fake_create(**kwargs):
+            calls.append((adapter.reasoning, kwargs['messages'][-1]['content']))
+            return _response('', 'long deliberation') if len(calls) == 1 else _response('Final answer [S1]')
+        adapter._create = fake_create
+        adapter.reasoning = 'high'
+        turn = await adapter.run_turn([TurnMessage(role='user', content='who is x')], [])
+        self.assertEqual(turn.text, 'Final answer [S1]')
+        self.assertEqual([c[0] for c in calls], ['high', 'off'])
+        self.assertIn('Answer directly', calls[1][1])
+        self.assertEqual(adapter.reasoning, 'high')  # the user's setting is restored
+        self.assertIn('long deliberation', turn.reasoning)
+
+    async def test_normal_reply_is_not_retried(self):
+        from adapters.base import TurnMessage
+        from adapters.local_adapter import LocalAdapter
+        adapter = LocalAdapter(model='qwen')
+        count = []
+
+        async def fake_create(**kwargs):
+            count.append(1)
+            return _response('Hello', 'short thought')
+        adapter._create = fake_create
+        self.assertEqual((await adapter.run_turn([TurnMessage(role='user', content='hi')], [])).text, 'Hello')
+        self.assertEqual(len(count), 1)
+
+
+class WebAnswerMemoryTests(unittest.TestCase):
+    def test_web_sourced_answers_are_stored_but_not_recallable(self):
+        from brain.brain import Brain
+
+        class Store:
+            def __init__(self): self.added = []
+            def create_thread(self, *a): pass
+            def add_message(self, thread_id, role, content, provider, meta=None, chunks=None):
+                self.added.append((role, chunks))
+
+        class Embedder:
+            def embed(self, texts): return [[0.0] for _ in texts]
+            def embed_one(self, text): return [0.0]
+        store = Store()
+        brain = Brain(adapter=type('A', (), {'name': 'a'})(), store=store, embedder=Embedder(),
+                      thread_id='t', provider='local')
+        brain._store_turn('assistant', 'Dr X is a physician [S1].', recallable=False)
+        brain._store_turn('assistant', 'Plain chat answer.')
+        self.assertEqual(store.added[0], ('assistant', []))
+        self.assertTrue(store.added[1][1])
+
+
 if __name__ == '__main__':
     unittest.main()

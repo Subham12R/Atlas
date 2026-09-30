@@ -281,6 +281,11 @@ async def run_selected(body: AgentTurnRequest, session_adapter, provider: str,
         'brackets, e.g. [S1] or [S1][S2]. Do not describe the sources as untrusted. '
         + DISAMBIGUATION + ' '
         + body.instructions + '\n' + memory))]
+    if provider == 'local' and body.mode == 'search_web' and getattr(writer, 'reasoning', None) in (
+            'medium', 'high', 'max'):
+        # Writing an answer from five snippets needs no deep deliberation; small local thinking
+        # models burn the whole output budget re-checking instructions.
+        writer.reasoning = 'low'
     recent = body.recent
     evidence_lines = [f"[{s['source_id']}] {s['title']} ({s['url']}): {s['snippet']}" for s in sources]
     if provider == 'local':

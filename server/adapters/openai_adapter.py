@@ -38,6 +38,20 @@ def _content(prompt: str, images: list[ImageInput] | None):
     return parts
 
 
+NUDGE = ('(Answer directly and concisely from the sources now. Do not list or re-check these '
+         'instructions, and do not deliberate at length.)')
+
+
+def _nudged(messages: list[dict]) -> list[dict]:
+    """Copy of the messages with a brevity nudge on the last user turn."""
+    out = [dict(m) for m in messages]
+    for message in reversed(out):
+        if message.get('role') == 'user' and isinstance(message.get('content'), str):
+            message['content'] += '\n\n' + NUDGE
+            break
+    return out
+
+
 class OpenAIAdapter(BaseAdapter):
     name = "openai"
 
@@ -113,8 +127,24 @@ class OpenAIAdapter(BaseAdapter):
                                arguments=c.function.arguments)
                       for c in (message.tool_calls or []))
         text, inline = split_reasoning(message.content or '')
+        reasoning = _reasoning_field(message) + inline
+        if not text.strip() and not calls and not tools and reasoning.strip():
+            # A thinking model spent its whole output budget deliberating (some servers still
+            # report finish_reason 'stop'). Retry once with reasoning off and a nudge.
+            logging.getLogger(__name__).warning('%s returned no answer after thinking; retrying', self.model)
+            retry = dict(kwargs)
+            retry['messages'] = _nudged(kwargs['messages'])
+            previous, self.reasoning = self.reasoning, 'off'
+            try:
+                response = await self._create(**retry)
+            finally:
+                self.reasoning = previous
+            message = response.choices[0].message
+            text, inline = split_reasoning(message.content or '')
+            reasoning += _reasoning_field(message) + inline
+            choice = response.choices[0]
         return AdapterTurn(text=text, calls=calls, stop_reason=choice.finish_reason or 'stop',
-                           reasoning=_reasoning_field(message) + inline)
+                           reasoning=reasoning)
 
     async def stream_turn(self, messages: list[TurnMessage], tools: list[dict]):
         native = self._turn_messages(messages)

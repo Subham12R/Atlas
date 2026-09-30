@@ -1,6 +1,6 @@
 {
   "name": "atlas",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Atlas -- a desktop AI assistant for legal work",
   "main": "./out/main/index.js",
   "author": "Subham12R",

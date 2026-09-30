@@ -14,6 +14,7 @@ import {
 import { cn } from '@/lib/utils'
 import { highlightCode } from '@/lib/highlight'
 import { chatToHtml } from '@/lib/exportHtml'
+import { DocumentDraftReview } from '@/components/DocumentDraftReview'
 import { PromptBox, fileIcon, type Attachment } from '@/components/ui/chatgpt-prompt-input'
 import { LoadingState } from '@/components/LoadingState'
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai/reasoning'
@@ -24,6 +25,9 @@ import {
   friendlyErrorMessage,
   getLocalModels,
   getProviderSettings,
+  getProviders,
+  type DraftArtifact,
+  type DraftKind,
   type MemoryRecall,
   type ProviderSettingsMap
 } from '@/lib/api'
@@ -61,9 +65,13 @@ export interface Message {
   thinking?: string
   /** Uploaded/generated attachments, rendered as blocks above the text. */
   attachments?: MessageAttachment[]
-  /** Sources consulted for a Search-web/Research-mode reply -- rendered as
-   * circular favicon pins below the response text. */
-  sources?: { title: string; url: string }[]
+  /** Server-issued web sources, shown only when the final answer cites their IDs. */
+  sources?: { title: string; url: string; source_id?: string; snippet?: string; host?: string; fetched?: boolean }[]
+  queries?: string[]
+  runPhase?: string
+  runStatus?: 'completed' | 'partial'
+  attachmentSources?: { source_id: string; filename: string; section: string }[]
+  draft?: DraftArtifact
   /** The tool used to produce this reply (searchWeb/deepResearch/thinkLonger/
    * writeCode), if any -- picks the reply's visual treatment (Task trace,
    * Plan card, or the default plain bubble). */
@@ -99,7 +107,8 @@ interface ChatAreaProps {
     provider: string,
     model: string | null,
     attachments: Attachment[],
-    mode: ExecutionMode
+    mode: ExecutionMode,
+    draftKind: DraftKind
   ) => void
   onNewChat: () => void
   onTogglePin: (id: string) => void
@@ -233,15 +242,15 @@ function SearchTrace({
   sources
 }: {
   tool?: string
-  sources?: { title: string; url: string }[]
+  sources?: Message['sources']
 }): React.JSX.Element | null {
-  if ((tool !== 'searchWeb' && tool !== 'deepResearch') || !sources || sources.length === 0) {
+  if ((tool !== 'searchWeb' && tool !== 'deepResearch' && tool !== 'safeTools') || !sources || sources.length === 0) {
     return null
   }
 
   return (
     <Task defaultOpen={false}>
-      <TaskTrigger title={tool === 'deepResearch' ? 'Researched the web' : 'Searched the web'} />
+      <TaskTrigger title={tool === 'deepResearch' ? 'Research sources' : 'Searched the web'} />
       <TaskContent>
         {sources.map((s, i) => (
           <TaskItem key={i}>
@@ -251,7 +260,7 @@ function SearchTrace({
               rel="noreferrer"
               className="hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3] hover:underline"
             >
-              {s.title || s.url}
+              {s.source_id ? `[${s.source_id}] ` : ''}{s.title || s.url}{s.fetched ? ' · read' : ''}
             </a>
           </TaskItem>
         ))}
@@ -262,11 +271,7 @@ function SearchTrace({
 
 /** Collapsible "Used N sources" list for a Search-web/Research-mode reply's
  * citations, shown below the response text. */
-function SourcePins({
-  sources
-}: {
-  sources?: { title: string; url: string }[]
-}): React.JSX.Element | null {
+function SourcePins({ sources }: { sources?: Message['sources'] }): React.JSX.Element | null {
   if (!sources || sources.length === 0) return null
 
   return (
@@ -365,6 +370,7 @@ export default function ChatArea({
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [providerSettings, setProviderSettings] = useState<ProviderSettingsMap>({})
   const [providerLoadError, setProviderLoadError] = useState('')
+  const [toolModels, setToolModels] = useState<Record<string, string[]>>({})
   const [localModels, setLocalModels] = useState<string[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -383,6 +389,11 @@ export default function ChatArea({
       getLocalModels()
         .then((result) => setLocalModels(result.models))
         .catch(() => setLocalModels([]))
+      getProviders()
+        .then((items) => setToolModels(Object.fromEntries(
+          items.map((item) => [item.provider, item.capabilities?.tool_models || []])
+        )))
+        .catch(() => setToolModels({}))
     }
     refresh()
     window.addEventListener('providers:updated', refresh)
@@ -454,7 +465,8 @@ export default function ChatArea({
     text: string,
     selectedTool: string | null,
     attachments: Attachment[],
-    mode: ExecutionMode
+    mode: ExecutionMode,
+    draftKind: DraftKind
   ): void => {
     onSendMessage(
       text,
@@ -462,12 +474,18 @@ export default function ChatArea({
       selectedModelObj.provider,
       selectedModelObj.model || null,
       attachments,
-      mode
+      mode,
+      draftKind
     )
   }
 
   // Custom typography parser for markdown-like formatting
-  const parseMarkdownContent = (text: string, isStreaming = false): React.ReactNode[] => {
+  const parseMarkdownContent = (
+    text: string,
+    isStreaming = false,
+    sources?: Message['sources'],
+    attachmentSources?: Message['attachmentSources']
+  ): React.ReactNode[] => {
     const lines = text.split('\n')
     let inCodeBlock = false
     let codeBlockLang = ''
@@ -551,8 +569,8 @@ export default function ChatArea({
       const parts: React.ReactNode[] = []
       let lastIndex = 0
 
-      // Match bold (**text**) or code (`code`)
-      const regex = /(\*\*([^*]+)\*\*|`([^`]+)`)/g
+      // Match bold, code, or a server-issued source citation.
+      const regex = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([SA]\d+)\])/g
       let match
 
       let index = 0
@@ -571,7 +589,6 @@ export default function ChatArea({
             </strong>
           )
         } else if (fullMatch.startsWith('`')) {
-          // Code inline
           parts.push(
             <code
               key={index++}
@@ -580,6 +597,14 @@ export default function ChatArea({
               {match[3]}
             </code>
           )
+        } else {
+          const source = sources?.find((s) => s.source_id === match[4])
+          const attachment = attachmentSources?.find((s) => s.source_id === match[4])
+          parts.push(source ? (
+            <a key={index++} href={source.url} target="_blank" rel="noreferrer" className="text-blue-600 underline" title={source.title}>
+              {fullMatch}
+            </a>
+          ) : attachment ? <span key={index++} title={`${attachment.filename}, ${attachment.section}`}>{fullMatch}</span> : fullMatch)
         }
         lastIndex = regex.lastIndex
       }
@@ -785,10 +810,23 @@ export default function ChatArea({
           animate={!!message.isNew}
           isStreaming={isStreaming}
           onDone={() => onMessageRevealed(message.id)}
-          render={(text) => parseMarkdownContent(text, isStreaming)}
+          render={(text) => parseMarkdownContent(text, isStreaming, message.sources, message.attachmentSources)}
         />
       </div>
-      <SourcePins sources={message.sources} />
+      {message.attachmentSources?.length ? (
+        <div className="my-2 text-xs text-muted-foreground">
+          Attached-file evidence: {message.attachmentSources.map((item) =>
+            `${item.source_id} ${item.filename} (${item.section})`
+          ).join(' · ')}
+        </div>
+      ) : null}
+      <SourcePins sources={message.sources?.filter((source) =>
+        !source.source_id || message.content.includes(`[${source.source_id}]`)
+      )} />
+      {message.draft && <DocumentDraftReview draft={message.draft} content={message.content} />}
+      {message.runStatus === 'partial' && (
+        <p className="text-xs text-amber-700 dark:text-amber-300">Partial research: {message.runPhase || 'some evidence was unavailable'}</p>
+      )}
       <MemoryUsed memory={message.memory} />
       <div className="mt-1.5 flex items-center justify-between">
         <span className="text-[10px] text-[#9E9D9A] dark:text-[#6E6D6A]">
@@ -876,6 +914,12 @@ export default function ChatArea({
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  )
+  const providerDefaults: Record<string, string> = {
+    openai: 'gpt-4o', anthropic: 'claude-sonnet-4-5', gemini: 'gemini-2.5-flash'
+  }
+  const toolCallsAvailable = (toolModels[selectedModelObj.provider] || []).includes(
+    selectedModelObj.model || providerDefaults[selectedModelObj.provider] || ''
   )
 
   return (
@@ -974,7 +1018,12 @@ export default function ChatArea({
 
               {/* Render centered PromptBox when chat has no messages */}
               <div className="w-full max-w-3xl">
-                <PromptBox onSubmitPrompt={handlePromptSubmit} modelPicker={modelPicker} canSend={activeModels.length > 0} />
+                <PromptBox
+                  onSubmitPrompt={handlePromptSubmit}
+                  modelPicker={modelPicker}
+                  canSend={activeModels.length > 0}
+                  toolCallsAvailable={toolCallsAvailable}
+                />
               </div>
 
               {/* Grid of Starters
@@ -1110,6 +1159,8 @@ export default function ChatArea({
                             <div className="w-full max-w-56 aspect-[4/3] rounded-xl bg-[#EAE8E3] dark:bg-[#2C2C2A] overflow-hidden relative">
                               <div className="skeleton-shimmer absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/40 dark:via-white/10 to-transparent" />
                             </div>
+                          ) : lastMessage?.runPhase ? (
+                            <span className="text-sm text-muted-foreground">{lastMessage.runPhase}</span>
                           ) : (
                             <LoadingState key={activeChat.id} />
                           )}
@@ -1145,6 +1196,7 @@ export default function ChatArea({
               modelPicker={modelPicker}
               canSend={activeModels.length > 0}
               isBusy={activeChat.isSending}
+              toolCallsAvailable={toolCallsAvailable}
               onStop={() => onStopSending(activeChat.id)}
             />
           </div>

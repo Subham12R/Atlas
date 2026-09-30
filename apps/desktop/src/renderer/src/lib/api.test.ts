@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { sendMessage, sendMessageStream } from './api'
+import { sendAgentStream, sendMessage, sendMessageStream } from './api'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -100,6 +100,23 @@ it('sends the selected mode with streamed prompt and images', async () => {
     images: [{ data: 'YWJj', mime: 'image/png' }],
     mode: 'research'
   })
+})
+
+it('sends the local bearer token with agent stream requests', async () => {
+  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  const fetch = vi.fn<typeof globalThis.fetch>(
+    async () => new Response('data: {"type":"run.completed","status":"completed"}\n\n')
+  )
+  vi.stubGlobal('fetch', fetch)
+
+  await sendAgentStream(
+    'session-1',
+    { prompt: 'research this', mode: 'research' },
+    vi.fn(),
+    new AbortController().signal
+  )
+
+  expect(fetch.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-token' })
 })
 
 it('defaults plain-message requests to Auto without adding images', async () => {

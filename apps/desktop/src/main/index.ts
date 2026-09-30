@@ -1,15 +1,24 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, type IpcMainInvokeEvent } from 'electron'
 import { spawn, type ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
-import { join } from 'path'
+import { basename, join } from 'path'
 import bcrypt from 'bcryptjs'
-import { writeFile, rm, readFile, mkdir, rename, open } from 'fs/promises'
+import { writeFile, rm, readFile, mkdir, rename, open, lstat } from 'fs/promises'
 import { tmpdir } from 'os'
 import { randomBytes, randomUUID } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { getFreeLoopbackPort } from './loopback-port.mjs'
+import { resolveDestinationSelection, saveDocumentAtomically, validateDraftFilename } from './document-save.mjs'
 import icon from '../../resources/icon.png?asset'
 import { checkOllamaHealth, createLocalRuntimeManager } from './localRuntime'
+
+interface DocumentSaveRequest {
+  draftId: string
+  filename: string
+  content: string
+  destinationToken: string
+  overwrite?: boolean
+}
 
 interface ExportPdfResult {
   ok: boolean
@@ -40,6 +49,9 @@ interface User {
   memoryPrompt?: string
   responseStyle?: string
 }
+
+const documentDestinations = new Map<string, { draftId: string; filename: string; filePath: string }>()
+const savedDocuments = new Map<string, { path: string; hash: string }>()
 
 const DEFAULT_PROFILE: Profile = {
   name: '',
@@ -410,6 +422,48 @@ async function registerUser(profile: RegisterProfile): Promise<boolean> {
   return true
 }
 
+async function chooseDocumentDestination(draftId: string, filename: string) {
+  validateDraftFilename(filename)
+  if (!/^[a-f0-9]{32}$/.test(draftId)) throw new TypeError('invalid draft ID')
+  const selection = await dialog.showSaveDialog({
+    title: 'Save document draft',
+    defaultPath: filename,
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+    properties: []
+  })
+  const filePath = resolveDestinationSelection(selection)
+  if (!filePath) return { canceled: true as const }
+  validateDraftFilename(basename(filePath))
+  const token = randomUUID()
+  documentDestinations.set(token, { draftId, filename, filePath })
+  let exists = false
+  try {
+    await lstat(filePath)
+    exists = true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  return { canceled: false as const, token, path: filePath, exists }
+}
+
+async function saveDocument(request: DocumentSaveRequest) {
+  const selected = documentDestinations.get(request.destinationToken)
+  if (!selected || selected.draftId !== request.draftId || selected.filename !== request.filename) {
+    const previous = savedDocuments.get(request.draftId)
+    if (!previous) throw new TypeError('document destination was not selected')
+    return saveDocumentAtomically({
+      draftId: request.draftId, filename: request.filename, content: request.content,
+      destination: previous.path, overwrite: false, saved: savedDocuments
+    })
+  }
+  const result = await saveDocumentAtomically({
+    draftId: request.draftId, filename: request.filename, content: request.content,
+    destination: selected.filePath, overwrite: request.overwrite === true, saved: savedDocuments
+  })
+  if (result.status === 'saved') documentDestinations.delete(request.destinationToken)
+  return result
+}
+
 async function exportHtmlToPdf(html: string): Promise<ExportPdfResult> {
   const { canceled, filePath } = await dialog.showSaveDialog({
     title: 'Export chat as PDF',
@@ -493,6 +547,14 @@ app.whenReady().then(async () => {
   ipcMain.on('ping', () => console.log('pong'))
 
   ipcMain.handle('export-pdf', (_event, html: string) => exportHtmlToPdf(html))
+  ipcMain.handle('choose-document-destination', (event, draftId: string, filename: string) => {
+    assertTrustedMainFrame(event)
+    return chooseDocumentDestination(draftId, filename)
+  })
+  ipcMain.handle('save-document', (event, request: DocumentSaveRequest) => {
+    assertTrustedMainFrame(event)
+    return saveDocument(request)
+  })
   ipcMain.handle('get-backend-url', (event) => {
     assertTrustedMainFrame(event)
     return backendUrl

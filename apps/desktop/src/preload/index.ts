@@ -21,6 +21,13 @@ export interface RegisterProfile {
 const api = {
   exportPdf: (html: string): Promise<{ ok: boolean; path?: string; canceled?: boolean }> =>
     ipcRenderer.invoke('export-pdf', html),
+  chooseDocumentDestination: (draftId: string, filename: string): Promise<
+    { canceled: true } | { canceled: false; token: string; path: string; exists: boolean }
+  > => ipcRenderer.invoke('choose-document-destination', draftId, filename),
+  saveDocument: (request: {
+    draftId: string; filename: string; content: string; destinationToken: string; overwrite?: boolean
+  }): Promise<{ status: 'saved' | 'exists'; path: string; duplicate?: boolean }> =>
+    ipcRenderer.invoke('save-document', request),
   getBackendUrl: (): Promise<string | null> => ipcRenderer.invoke('get-backend-url'),
   getProfile: (): Promise<Profile> => ipcRenderer.invoke('get-profile'),
   setProfile: (profile: Profile): Promise<void> => ipcRenderer.invoke('set-profile', profile),

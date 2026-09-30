@@ -69,7 +69,9 @@ it('passes the selected mode and existing prompt fields to its parent', async ()
   })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
-  expect(onSendMessage).toHaveBeenCalledWith('Find the facts', null, 'local', null, [], 'research')
+  expect(onSendMessage).toHaveBeenCalledWith(
+    'Find the facts', null, 'local', null, [], 'research', 'research_brief'
+  )
 })
 
 it('filters connected models from the composer and sends the selected local model without logos', async () => {
@@ -117,7 +119,9 @@ it('filters connected models from the composer and sends the selected local mode
 
   fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'Hello' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
-  expect(onSendMessage).toHaveBeenCalledWith('Hello', null, 'local', 'qwen2.5:7b', [], 'auto')
+  expect(onSendMessage).toHaveBeenCalledWith(
+    'Hello', null, 'local', 'qwen2.5:7b', [], 'auto', 'research_brief'
+  )
 })
 
 it('uses a neutral assistant glyph instead of a model brand in replies', async () => {

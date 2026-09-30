@@ -18,6 +18,12 @@ export interface RegisterProfile {
 
 export interface Api {
   exportPdf: (html: string) => Promise<{ ok: boolean; path?: string; canceled?: boolean }>
+  chooseDocumentDestination: (draftId: string, filename: string) => Promise<
+    { canceled: true } | { canceled: false; token: string; path: string; exists: boolean }
+  >
+  saveDocument: (request: {
+    draftId: string; filename: string; content: string; destinationToken: string; overwrite?: boolean
+  }) => Promise<{ status: 'saved' | 'exists'; path: string; duplicate?: boolean }>
   getBackendUrl: () => Promise<string | null>
   getProfile: () => Promise<Profile>
   setProfile: (profile: Profile) => Promise<void>

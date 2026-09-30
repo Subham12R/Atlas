@@ -13,7 +13,7 @@ it('submits the chosen mode with the prompt, then resets for the next turn', () 
   })
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
-  expect(onSubmitPrompt).toHaveBeenCalledWith('Write a parser', null, [], 'coding')
+  expect(onSubmitPrompt).toHaveBeenCalledWith('Write a parser', null, [], 'coding', 'research_brief')
   expect(screen.getByRole('button', { name: 'Execution mode: Auto' })).toBeTruthy()
 })
 
@@ -28,5 +28,5 @@ it('keeps the chosen mode when submitting while another reply is busy', () => {
   })
   fireEvent.click(screen.getByRole('button', { name: 'Queue message' }))
 
-  expect(onSubmitPrompt).toHaveBeenCalledWith('Summarize later', null, [], 'documentation')
+  expect(onSubmitPrompt).toHaveBeenCalledWith('Summarize later', null, [], 'documentation', 'research_brief')
 })

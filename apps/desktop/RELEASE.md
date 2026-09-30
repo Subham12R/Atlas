@@ -1,3 +1,18 @@
+## Atlas 1.0.7
+
+**Updates.** Profile now has an **Updates** panel that checks GitHub Releases for a newer Atlas, shows the release notes, and opens the download for your platform. Atlas is not code-signed, so it does not install updates by itself: download the new build and install it over the old one. The check contacts `api.github.com` only when you open Profile or press **Check for updates**, sends no personal data, and only ever opens links inside github.com/Subham12R/Atlas.
+
+**Auto mode really searches now.** Auto used to pick a tool-calling route that could never search while chat memory was attached. It now runs the Search workflow for any model. It also recognises more lookups ("who is…", "tell me about…", "CEO of…", "release date…") and keeps searching for a short follow-up to a search.
+
+**Follow-ups keep their subject.** "from adamas university" after "who is dr sajal saha" is rewritten into one full search query from the visible chat, and the query used is shown. Private memory and attached files are never used for it. If it is still ambiguous, Atlas asks. Answers no longer merge different people who share a name.
+
+**Steadier local models.**
+- Atlas starts Ollama with an 8192-token context (the default silently cut off instructions and sources) and caps reply length.
+- A runaway or repeating "thinking" stream is stopped and retried once without reasoning.
+- Sources and chat history are trimmed to fit small context windows instead of being cut off.
+- Memory is cut at whole items; answers built from web results no longer save facts to memory.
+- An overloaded or rate-limited provider (503/429) shows a short message instead of raw JSON.
+
 ## Atlas 1.0.6
 
 **Web search without an API key, in one click.** Profile → Advanced → Web search → **Set up free search**. Atlas installs [free-search-mcp](https://github.com/sweetcornna/free-search-mcp) in the background (and `uv` if needed), runs a test search, and switches over only once that works; it takes about 10 seconds. Queries still go to public search engines, with SafeSearch set to strict. You can switch back to a Tavily key at any time.

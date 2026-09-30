@@ -4,6 +4,7 @@ default since local servers are typically unauthenticated.
 """
 from __future__ import annotations
 
+from budget import local_max_tokens, local_num_ctx
 from reasoning import local_effort
 
 from .openai_adapter import OpenAIAdapter
@@ -27,3 +28,12 @@ class LocalAdapter(OpenAIAdapter):
         # Non-thinking local models may reject this; OpenAIAdapter._create retries without it.
         effort = local_effort(self.reasoning)
         return {'reasoning_effort': effort} if effort else {}
+
+    def _generation_kwargs(self) -> dict:
+        # Bounded output and mild repetition control keep small models from looping. Ollama gets
+        # its context size from OLLAMA_CONTEXT_LENGTH (set when Atlas starts it); the options
+        # below also apply for Ollama servers that honor them. Other servers ignore extras.
+        kwargs = {'max_tokens': local_max_tokens(), 'temperature': 0.4}
+        if ':11434' in str(self._client.base_url):
+            kwargs['extra_body'] = {'options': {'num_ctx': local_num_ctx(), 'repeat_penalty': 1.15}}
+        return kwargs

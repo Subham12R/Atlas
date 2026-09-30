@@ -14,7 +14,7 @@ from openai import AsyncOpenAI, BadRequestError
 from reasoning import openai_effort
 
 from .base import (AdapterCapabilities, AdapterEvent, AdapterTurn, BaseAdapter,
-                   ImageInput, ReasoningSplitter, Reply, ToolCall, TurnMessage,
+                   ImageInput, ReasoningSplitter, Reply, ThinkingGuard, ThinkingRunaway, ToolCall, TurnMessage,
                    alternating_turns, split_reasoning)
 
 
@@ -79,8 +79,13 @@ class OpenAIAdapter(BaseAdapter):
         effort = openai_effort(self.model, self.reasoning)
         return {'reasoning_effort': effort} if effort else {}
 
+    def _generation_kwargs(self) -> dict:
+        """Per-provider generation limits; hosted providers use their own defaults."""
+        return {}
+
     async def _create(self, **kwargs):
         """One bounded retry without the reasoning parameter if the model rejects it."""
+        kwargs = {**self._generation_kwargs(), **kwargs}
         extra = {} if self._reasoning_rejected else self._reasoning_kwargs()
         try:
             return await self._client.chat.completions.create(**kwargs, **extra)
@@ -169,34 +174,53 @@ class OpenAIAdapter(BaseAdapter):
 
     async def send_stream(self, prompt: str, images: list[ImageInput] | None = None):
         messages = [*self._messages, {"role": "user", "content": _content(prompt, images)}]
-        resp = await self._create(model=self.model, messages=messages, stream=True)
-        text_chunks = []
-        splitter = ReasoningSplitter()
-        async for chunk in resp:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            thinking = _reasoning_field(delta)
-            if thinking:
-                yield {'thinking': thinking}
-            for kind, text in splitter.feed(delta.content or ''):
-                if kind == 'thinking':
-                    yield {'thinking': text}
-                else:
-                    text_chunks.append(text)
-                    yield text
-        for kind, text in splitter.flush():
-            if kind == 'thinking':
-                yield {'thinking': text}
-            else:
-                text_chunks.append(text)
-                yield text
+        text_chunks: list[str] = []
+        try:
+            async for piece in self._stream_once(messages, text_chunks):
+                yield piece
+        except ThinkingRunaway:
+            # One retry with reasoning off and a nudge; thinking already shown stays shown.
+            logging.getLogger(__name__).warning('%s ran away thinking; retrying without reasoning', self.model)
+            text_chunks.clear()
+            nudged = [*messages[:-1], {"role": "user", "content": _content(
+                prompt + "\n\n(Answer directly and concisely; do not deliberate at length.)", images)}]
+            previous, self.reasoning = self.reasoning, 'off'
+            try:
+                async for piece in self._stream_once(nudged, text_chunks, guard=False):
+                    yield piece
+            finally:
+                self.reasoning = previous
 
         # Thinking is shown to the user but never replayed as the assistant's words.
         full_text = "".join(text_chunks)
         if not full_text.strip():
             raise ValueError('model returned no text')
         self._messages = [*messages, {"role": "assistant", "content": full_text}]
+
+    async def _stream_once(self, messages: list[dict], text_chunks: list[str], guard: bool = True):
+        resp = await self._create(model=self.model, messages=messages, stream=True)
+        splitter = ReasoningSplitter()
+        watchdog = ThinkingGuard() if guard else None
+
+        def route(kind: str, text: str):
+            if watchdog:
+                watchdog.feed(kind, text)
+            if kind == 'thinking':
+                return {'thinking': text}
+            text_chunks.append(text)
+            return text
+
+        async for chunk in resp:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            thinking = _reasoning_field(delta)
+            if thinking:
+                yield route('thinking', thinking)
+            for kind, text in splitter.feed(delta.content or ''):
+                yield route(kind, text)
+        for kind, text in splitter.flush():
+            yield route(kind, text)
 
     async def close(self) -> None:
         await self._client.close()

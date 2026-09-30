@@ -14,6 +14,7 @@ import { isExternalWebUrl } from './external-url.mjs'
 import { isTrustedRendererUrl } from './renderer-origin.mjs'
 import icon from '../../resources/icon.png?asset'
 import { checkOllamaHealth, createLocalRuntimeManager } from './localRuntime'
+import { checkForUpdate, type UpdateTargets } from './updateCheck'
 
 interface DocumentSaveRequest {
   draftId: string
@@ -619,6 +620,21 @@ app.whenReady().then(async () => {
   ipcMain.handle('local-runtime:stop', (event, runtimeId: unknown) => {
     assertTrustedMainFrame(event)
     return localRuntime.stop(typeof runtimeId === 'string' ? runtimeId : '')
+  })
+  let updateTargets: UpdateTargets | null = null
+  ipcMain.handle('update:check', async (event) => {
+    assertTrustedMainFrame(event)
+    const { result, targets } = await checkForUpdate(app.getVersion(), process.platform)
+    updateTargets = targets
+    return result
+  })
+  // The renderer names which link it wants; the URL itself always comes from the last check.
+  ipcMain.handle('update:open', async (event, kind: unknown) => {
+    assertTrustedMainFrame(event)
+    const url = kind === 'download' ? updateTargets?.downloadUrl : updateTargets?.releaseUrl
+    if (!url || !isExternalWebUrl(url)) return false
+    await shell.openExternal(url)
+    return true
   })
   ipcMain.handle('get-chats', () => getChats())
   ipcMain.handle('set-chats', (_event, chats: unknown[]) => setChats(chats))

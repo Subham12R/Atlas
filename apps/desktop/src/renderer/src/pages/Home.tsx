@@ -8,7 +8,7 @@ import type { Attachment, FileAttachment } from '@/components/ui/chatgpt-prompt-
 import { modeForTool, type AgentEvent } from '@/lib/agent-events.mjs'
 import type { ExecutionMode } from '@/lib/modes'
 import { supportsImageGeneration, type ComposerPreference } from '@/lib/chat-intent'
-import { conversationHistory, isContinuation, resolveSearchPrompt } from '@/lib/conversation'
+import { conversationHistory, followsSearch, isContinuation, resolveSearchPrompt } from '@/lib/conversation'
 
 interface UserProfile {
   name: string
@@ -526,7 +526,8 @@ function Home(): React.JSX.Element {
         ? await routeTurn(content.trim() || 'Describe the attached image.', mode,
             autoModel ? undefined : { provider, model: model || '' },
             controller.signal,
-            { allowCloud: options.allowCloud, reasoning: options.reasoning, agentMode: requestedAgentMode })
+            { allowCloud: options.allowCloud, reasoning: options.reasoning, agentMode: requestedAgentMode,
+              followsSearch: followsSearch(content, history) })
         : null
       if (route && (
         !['ready', 'degraded'].includes(route.state) || !route.model || !route.provider ||

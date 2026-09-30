@@ -1,5 +1,6 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LocalRuntimeId, LocalRuntimeStatus } from '../shared/localRuntime'
+import type { UpdateResult } from '../shared/update'
 
 export interface Profile {
   name: string
@@ -33,6 +34,8 @@ export interface Api {
   getLocalRuntimeStatus: (runtimeId: LocalRuntimeId) => Promise<LocalRuntimeStatus>
   startLocalRuntime: (runtimeId: LocalRuntimeId) => Promise<LocalRuntimeStatus>
   stopLocalRuntime: (runtimeId: LocalRuntimeId) => Promise<LocalRuntimeStatus>
+  checkForUpdate: () => Promise<UpdateResult>
+  openUpdate: (kind: 'release' | 'download') => Promise<boolean>
   getChats: () => Promise<unknown[]>
   setChats: (chats: unknown[]) => Promise<void>
   minimizeWindow: () => void

@@ -192,6 +192,20 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
             registry.assert_not_called()
         self.assertNotIn('PRIVATE-DO-NOT-SEARCH', str(events))
 
+    async def test_bare_continuations_never_search_the_literal_word(self):
+        from tools.contracts import AgentTurnRequest
+        for prompt in ('continue', 'Try again.', 'go on'):
+            registry = type('R', (), {'calls': [], 'run': None})()
+            async def run(*args, **kwargs):
+                registry.calls.append(args)
+            registry.run = run
+            events = []
+            with patch('agents.runner.default_registry', return_value=registry):
+                await run_selected(AgentTurnRequest(prompt=prompt, mode='search_web'), object(),
+                                   'fake', None, events.append, asyncio.Event())
+            self.assertEqual(registry.calls, [], prompt)
+            self.assertIn('subject', next(e['text'] for e in events if e['type'] == 'assistant.delta'))
+
     async def test_short_do_followup_does_not_search_the_literal_word(self):
         from tools.contracts import AgentTurnRequest
         class Writer:

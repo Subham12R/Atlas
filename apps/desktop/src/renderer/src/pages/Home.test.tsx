@@ -399,3 +399,48 @@ it('follows an Auto tool call and sends the routed reasoning level', async () =>
   // Settled (Retry only shows once sending ends), so no effect fires after teardown.
   await screen.findByRole('button', { name: 'Retry response' })
 })
+
+it('treats "continue" after a failed search as a retry of that search, not a search for "continue"', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', {
+    getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }),
+    getChats: async () => [{
+      id: 'c1', title: 'Search chat', isPinned: false, timestamp: '', provider: 'local', model: 'installed:7b',
+      sessionId: 'session-1', threadId: null,
+      messages: [
+        { id: 'u1', sender: 'user', timestamp: '', content: 'who is subham12r',
+          request: { tool: 'searchWeb', mode: 'auto', draftKind: 'research_brief', provider: 'local',
+            model: 'installed:7b', reasoning: 'medium', allowCloud: false } },
+        { id: 'a1', sender: 'assistant', timestamp: '', tool: 'searchWeb',
+          content: '**Error:** Web search needs a Tavily key in Settings.' }
+      ]
+    }],
+    getProfile: async () => ({ name: '', avatarDataUrl: null }),
+    setChats: async () => {}
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+    const path = new URL(String(input)).pathname
+    if (path.endsWith('/agent/stream')) {
+      return new Response('data: {"type":"assistant.delta","text":"Subham is a developer [S1]."}\n\ndata: {"type":"run.completed","status":"completed"}\n\n')
+    }
+    return new Response(JSON.stringify(path === '/settings/providers'
+      ? { local: { configured: true, runtime: 'ollama' } }
+      : path === '/settings/providers/local/models'
+        ? { runtime: 'ollama', models: ['installed:7b'] }
+        : { state: 'ready', mode: 'research', provider: 'local', model: 'installed:7b', reason: 'explicit mode' }),
+    { headers: { 'Content-Type': 'application/json' } })
+  })
+  vi.stubGlobal('fetch', fetch)
+  render(<Home />)
+  fireEvent.click(await screen.findByText('Search chat'))
+  await screen.findByRole('button', { name: 'Model: installed:7b' })
+  fireEvent.change(screen.getByPlaceholderText('Message Atlas...'), { target: { value: 'continue' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+  await screen.findByText(/Subham is a developer/)
+  const agent = fetch.mock.calls.find(([url]) => String(url).endsWith('/agent/stream'))
+  expect(JSON.parse(String(agent?.[1]?.body))).toMatchObject({ prompt: 'who is subham12r', mode: 'search_web' })
+  expect(screen.queryByText(/needs a Tavily key/)).toBeNull()
+  expect(screen.queryByText('continue')).toBeNull()
+  // The latency label appears only after the turn fully settles (no effects after teardown).
+  await screen.findByText(/^\d+\.\ds$/)
+})

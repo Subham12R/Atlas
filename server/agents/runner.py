@@ -27,6 +27,12 @@ def _draft_filename(prompt: str) -> str:
     return f'{slug or "atlas-draft"}.md'
 
 
+# Bare "keep going" replies carry no subject; mirrors isContinuation in the renderer, which
+# first swaps in the previous search question when there was one.
+_CONTINUATION = re.compile(
+    r'^\s*(?:continue|go on|keep going|carry on|proceed|resume|retry|try again|again|do it|do that|do|'
+    r'go ahead|search(?: it| that| again)?|yes|yes please|ok|okay)\s*[.!]*\s*$', re.I)
+
 MODE_TOOLS = {
     'chat': frozenset(), 'search_web': frozenset({'web_search'}),
     'research': frozenset({'web_search', 'fetch_page'}),
@@ -154,7 +160,7 @@ async def run_selected(body: AgentTurnRequest, session_adapter, provider: str,
     if cancelled.is_set():
         raise asyncio.CancelledError()
     # ponytail: ambiguous follow-ups need an explicit subject; never build public queries from private history.
-    short_confirmation = body.prompt.strip().casefold() == 'do'
+    short_confirmation = bool(_CONTINUATION.match(body.prompt))
     if body.mode in {'search_web', 'research'} and (short_confirmation or re.search(
         r'\b(his|her|their|its|that (?:portfolio|person|paper|article|source|site))\b', body.prompt, re.I
     )):

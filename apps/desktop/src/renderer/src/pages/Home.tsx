@@ -8,7 +8,7 @@ import type { Attachment, FileAttachment } from '@/components/ui/chatgpt-prompt-
 import { modeForTool, type AgentEvent } from '@/lib/agent-events.mjs'
 import type { ExecutionMode } from '@/lib/modes'
 import { supportsImageGeneration, type ComposerPreference } from '@/lib/chat-intent'
-import { conversationHistory } from '@/lib/conversation'
+import { conversationHistory, isContinuation, resolveSearchPrompt } from '@/lib/conversation'
 
 interface UserProfile {
   name: string
@@ -270,13 +270,14 @@ function Home(): React.JSX.Element {
     )
   }
 
-  /** Regenerates an assistant reply in place, replaying its prompt's saved request. */
-  const handleRetryMessage = (messageId: string): void => {
+  /** Regenerates an assistant reply in place, replaying its prompt's saved request.
+   * Returns false when the turn can't be replayed (e.g. its attachments weren't stored). */
+  const handleRetryMessage = (messageId: string): boolean => {
     const chat = chats.find((c) => c.id === activeChatId)
     const index = chat?.messages.findIndex((m) => m.id === messageId) ?? -1
     const reply = chat?.messages[index]
     const prompt = chat?.messages[index - 1]
-    if (!chat || !reply || chat.isSending || prompt?.sender !== 'user' || prompt.attachments?.length) return
+    if (!chat || !reply || chat.isSending || prompt?.sender !== 'user' || prompt.attachments?.length) return false
     const r = prompt.request
     void handleSendMessage(
       prompt.content,
@@ -289,6 +290,7 @@ function Home(): React.JSX.Element {
       { reasoning: r?.reasoning ?? 'medium', allowCloud: r?.allowCloud ?? false },
       reply
     )
+    return true
   }
 
   const openThread = (threadId: string): (() => void) | undefined => {
@@ -321,6 +323,14 @@ function Home(): React.JSX.Element {
           chat.id === chatId ? { ...chat, queuedCount: queue.length } : chat
         )
       )
+      return
+    }
+
+    // "continue" / "try again" right after a failed reply means: run that request again.
+    const lastMessage = baseChat?.messages[baseChat.messages.length - 1]
+    if (!retryOf && attachments.length === 0 && isContinuation(content) &&
+        lastMessage?.sender === 'assistant' && lastMessage.content.startsWith('**Error:**') &&
+        handleRetryMessage(lastMessage.id)) {
       return
     }
 
@@ -556,6 +566,8 @@ function Home(): React.JSX.Element {
       // Bounded transcript of this chat before the current prompt (a retry excludes the
       // reply it replaces); the server resets the session's conversation to it.
       const transcript = conversationHistory(history)
+      // A search-mode continuation searches the previous search question, not the word itself.
+      const agentPrompt = resolveSearchPrompt(content, history)
 
       if (controller.signal.aborted) throw new ApiAborted('request aborted')
       if (!sessionId) {
@@ -711,7 +723,7 @@ function Home(): React.JSX.Element {
 
       const runTurn = (): Promise<void> => agentMode !== 'chat'
         ? sendAgentStream(sessionId as string, {
-            prompt: content,
+            prompt: agentPrompt,
             mode: agentMode,
             draft_kind: agentMode === 'draft' ? draftKind : undefined,
             instructions: buildFormattingRules() + (profile ? buildPersonalizationContext(profile) : ''),

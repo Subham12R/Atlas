@@ -54,7 +54,10 @@ class Brain:
     async def finish_agent_turn(self, prompt: str, final_text: str, recall,
                                 safe_metadata: dict | None = None, web_sourced: bool = False):
         self._store_turn("user", self._memory_text(prompt))
-        self._store_turn("assistant", final_text, meta=safe_metadata)
+        # Web answers cite source ids that only exist in their own run; recalling them later
+        # confuses the model (old [S1] vs new [S1]) and can resurrect wrong merged people.
+        self._store_turn("assistant", final_text, meta=safe_metadata,
+                         **({"recallable": False} if web_sourced else {}))
         if self.auto_summary:
             await self._enrich(prompt, final_text, facts=not web_sourced)
 
@@ -107,9 +110,10 @@ class Brain:
                 prompt = prompt.split(marker, 1)[-1]
         return prompt.strip()
 
-    def _store_turn(self, role: str, content: str, meta: dict | None = None) -> None:
+    def _store_turn(self, role: str, content: str, meta: dict | None = None,
+                    recallable: bool = True) -> None:
         """Chunk long messages, batch-embed the chunks, and persist them."""
-        texts = chunk_text(content, self.embedder, self.chunk_chars, self.chunk_overlap,
+        texts = [] if not recallable else chunk_text(content, self.embedder, self.chunk_chars, self.chunk_overlap,
                            self.chunk_breakpoint_type, self.chunk_breakpoint_amount)
         vecs = self.embedder.embed(texts) if texts else []
         self.store.add_message(self.thread_id, role, content, self.provider,

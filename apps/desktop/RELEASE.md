@@ -1,3 +1,9 @@
+## Atlas 1.0.8
+
+**Local thinking models answer again.** Some small thinking models (for example Qwen 3.5 9B in LM Studio) spent their whole reply budget deliberating and returned an empty answer. Atlas now retries once with reasoning off and a nudge to answer directly. In Search, local models also think at most a little, since an answer from a few sources needs no deep deliberation.
+
+**No more stale citations from memory.** Answers built from web results are no longer recalled from memory in later turns. Their `[S1]`-style citations only make sense within their own search, and they could resurrect wrong or merged people.
+
 ## Atlas 1.0.7
 
 **Updates.** Profile now has an **Updates** panel that checks GitHub Releases for a newer Atlas, shows the release notes, and opens the download for your platform. Atlas is not code-signed, so it does not install updates by itself: download the new build and install it over the old one. The check contacts `api.github.com` only when you open Profile or press **Check for updates**, sends no personal data, and only ever opens links inside github.com/Subham12R/Atlas.

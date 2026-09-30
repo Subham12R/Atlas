@@ -657,7 +657,7 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
           </div>
 
           {/* Appearance */}
-          <div className="flex items-center justify-between py-2 border-b border-[#E5E3DF] dark:border-[#2C2C2A]">
+          <div className="flex items-center justify-between py-2">
             <span className="text-sm font-semibold text-[#2E2E2D] dark:text-[#EAE8E3]">
               Appearance
             </span>

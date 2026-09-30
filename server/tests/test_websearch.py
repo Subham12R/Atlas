@@ -39,6 +39,7 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(response.status_code, 422)
             upstream.assert_not_called()
 
+    @patch.dict('os.environ', {'ATLAS_WEB_SEARCH_PROVIDER': 'tavily'})
     async def test_results_skip_malformed_urls_and_keep_valid_hits(self):
         malformed = json.loads((Path(__file__).parent / 'fixtures' / 'research' /
                                 'search-results.json').read_text())[-1]
@@ -110,7 +111,7 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
                                                   StdioServerParameters=lambda **kw: types.SimpleNamespace(**kw)),
                    'mcp.client': types.ModuleType('mcp.client'),
                    'mcp.client.stdio': types.SimpleNamespace(stdio_client=transport)}
-        with patch.dict(sys.modules, modules), patch.object(websearch.shutil, 'which',
+        with patch.dict(sys.modules, modules), patch.object(websearch, 'find_executable',
                                                            return_value='/fixture/search-mcp'):
             data = await websearch._free_search('guide', 3)
         self.assertEqual(data['results'][0]['snippet'], 'Excerpt')
@@ -145,7 +146,7 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
             return [{'title': 'Guide', 'url': 'https://example.org/', 'content': 'Public excerpt'}]
         with patch.dict('os.environ', {'ATLAS_WEB_SEARCH_PROVIDER': 'free-search-mcp'}), patch.object(
             api.credentials_store, 'get_value', return_value=None
-        ), patch.object(websearch.shutil, 'which', return_value='/fixture/search-mcp'), patch.object(
+        ), patch.object(websearch, 'find_executable', return_value='/fixture/search-mcp'), patch.object(
             api.websearch, 'search', side_effect=free_search) as upstream:
             response = await api.web_search(api.WebSearchRequest(query='public guide'), FakeRequest())
         self.assertEqual(response['results'][0]['url'], 'https://example.org/')
@@ -153,7 +154,7 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_free_search_missing_install_returns_actionable_503(self):
         with patch.dict('os.environ', {'ATLAS_WEB_SEARCH_PROVIDER': 'free-search-mcp'}), patch.object(
-            websearch.shutil, 'which', return_value=None
+            websearch, 'find_executable', return_value=None
         ), patch.object(api.credentials_store, 'get_value', return_value=None), patch.object(
             api.websearch, 'search'
         ) as upstream, self.assertRaises(api.HTTPException) as error:

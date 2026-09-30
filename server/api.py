@@ -36,6 +36,7 @@ import chat_store
 import imagegen
 import voice
 import websearch
+import free_search_setup
 from adapters.base import ImageInput
 from adapters.openai_adapter import OpenAIAdapter, DEFAULT_MODEL as OPENAI_DEFAULT_MODEL
 from adapters.anthropic_adapter import AnthropicAdapter, DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL
@@ -170,7 +171,7 @@ async def route_turn(body: TurnRouteRequest):
     return auto_route_turn(body.prompt, body.mode, body.agent_mode, candidates,
                            ExecutionPolicy(allow_cloud=cloud_preference or body.allow_cloud),
                            preference, body.reasoning,
-                           bool(credentials_store.get_value(TAVILY_KEY)))
+                           websearch.available(credentials_store.get_value(TAVILY_KEY)))
 
 
 class SessionCreate(BaseModel):
@@ -475,7 +476,32 @@ async def clear_provider_settings(provider: str):
 
 @app.get("/settings/search")
 async def get_search_settings():
-    return {"configured": bool(credentials_store.get_value(TAVILY_KEY))}
+    return {"configured": bool(credentials_store.get_value(TAVILY_KEY)),
+            "provider": websearch.provider(),
+            "available": websearch.available(credentials_store.get_value(TAVILY_KEY)),
+            "free_search": free_search_setup.status()}
+
+
+class SearchProviderUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    provider: Literal['tavily', 'free-search-mcp']
+
+
+@app.put("/settings/search/provider")
+async def set_search_provider(body: SearchProviderUpdate):
+    if body.provider == 'free-search-mcp' and not free_search_setup.status()['installed']:
+        raise HTTPException(409, 'free-search-mcp is not installed; use one-click setup first')
+    credentials_store.set_many({free_search_setup.PROVIDER_KEY: body.provider})
+    return {"provider": body.provider}
+
+
+@app.post("/settings/search/free-search/install")
+async def install_free_search():
+    """One click: install free-search-mcp headless (and uv if missing), then select it."""
+    try:
+        return await free_search_setup.install()
+    except (free_search_setup.SetupFailed, httpx.HTTPError, OSError) as e:
+        raise HTTPException(502, f"Free web search setup failed: {e}")
 
 
 @app.put("/settings/search")
@@ -737,8 +763,10 @@ async def agent_stream(sid: str, body: AgentTurnRequest, request: Request):
                 except Exception as e:
                     if isinstance(e, ValueError) and str(e) == 'selected model does not support native tool calls':
                         code, reason = 'unsupported_model', 'This model cannot choose tools. Choose a supported model, or use Search or Research.'
-                    elif isinstance(e, ValueError) and str(e) == 'no Tavily API key configured':
-                        code, reason = 'key_unavailable', 'Web search needs a Tavily key in Settings.'
+                    elif isinstance(e, websearch.SearchUnavailable):
+                        code, reason = 'key_unavailable', (
+                            "Web search isn't set up. In Profile \u2192 Advanced, turn on free web search "
+                            'or add a Tavily key.' if 'Tavily' in str(e) else f'Web search is unavailable: {e}.')
                     elif isinstance(e, (TimeoutError, asyncio.TimeoutError)):
                         code, reason = 'timeout', 'The agent run timed out. Try again.'
                     elif isinstance(e, (ToolDenied, ToolNotFound)):

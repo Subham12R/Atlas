@@ -221,7 +221,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict('os.environ', {'ATLAS_WEB_SEARCH_PROVIDER': 'free-search-mcp'}), patch(
             'agents.research.build_adapter', return_value=planner
         ), patch('agents.research.credentials_store.get_value', return_value=None), patch(
-            'websearch.shutil.which', return_value='/fixture/search-mcp'), patch(
+            'websearch.find_executable', return_value='/fixture/search-mcp'), patch(
             'agents.research.websearch.search', side_effect=search
         ) as upstream, patch('agents.research.fetch_page', side_effect=fetch):
             result = await research_run(AgentTurnRequest(prompt='Find a public guide', mode='research'),

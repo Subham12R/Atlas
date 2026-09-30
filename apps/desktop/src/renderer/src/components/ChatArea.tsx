@@ -20,7 +20,7 @@ import { LoadingState } from '@/components/LoadingState'
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai/reasoning'
 import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai/task'
 import { Plan, PlanHeader, PlanTitle, PlanTrigger, PlanContent } from '@/components/ai/plan'
-import { Sources, SourcesTrigger, SourcesContent, Source } from '@/components/ai/sources'
+import { Sources, SourcesTrigger, SourcesContent } from '@/components/ai/sources'
 import {
   friendlyErrorMessage,
   getLocalModels,
@@ -66,8 +66,9 @@ export interface Message {
   /** Uploaded/generated attachments, rendered as blocks above the text. */
   attachments?: MessageAttachment[]
   /** Server-issued web sources, shown only when the final answer cites their IDs. */
-  sources?: { title: string; url: string; source_id?: string; snippet?: string; host?: string; fetched?: boolean }[]
+  sources?: { title: string; url: string; source_id?: string; snippet?: string; host?: string; fetched?: boolean; published_date?: string; score?: number }[]
   queries?: string[]
+  researchPlan?: { objective: string; freshness?: string; source_criteria?: string[] }
   runPhase?: string
   runStatus?: 'completed' | 'partial'
   attachmentSources?: { source_id: string; filename: string; section: string }[]
@@ -239,20 +240,31 @@ function AttachmentBlocks({
  * duplicating it: this is the process, the pins are the citations. */
 function SearchTrace({
   tool,
-  sources
+  sources,
+  queries,
+  researchPlan
 }: {
   tool?: string
   sources?: Message['sources']
+  queries?: string[]
+  researchPlan?: Message['researchPlan']
 }): React.JSX.Element | null {
-  if ((tool !== 'searchWeb' && tool !== 'deepResearch' && tool !== 'safeTools') || !sources || sources.length === 0) {
+  if ((tool !== 'searchWeb' && tool !== 'deepResearch' && tool !== 'safeTools') ||
+      ((!sources || sources.length === 0) && (!queries || queries.length === 0))) {
     return null
   }
+  const sourceList = sources || []
 
   return (
     <Task defaultOpen={false}>
-      <TaskTrigger title={tool === 'deepResearch' ? 'Research sources' : 'Searched the web'} />
+      <TaskTrigger title={tool === 'deepResearch'
+        ? `Research · ${queries?.length || 0} queries · ${sourceList.filter((s) => s.fetched).length} pages read`
+        : `Searched the web · ${sourceList.length} sources`} />
       <TaskContent>
-        {sources.map((s, i) => (
+        {researchPlan && <p className="mb-2 text-xs font-medium">{researchPlan.objective}</p>}
+        {researchPlan?.freshness && <p className="mb-2 text-[10px] text-muted-foreground">Freshness: {researchPlan.freshness}</p>}
+        {queries?.length ? <ul className="mb-2 list-disc pl-4 text-xs">{queries.map((query) => <li key={query}>{query}</li>)}</ul> : null}
+        {sourceList.map((s, i) => (
           <TaskItem key={i}>
             <a
               href={s.url}
@@ -260,7 +272,7 @@ function SearchTrace({
               rel="noreferrer"
               className="hover:text-[#2E2E2D] dark:hover:text-[#EAE8E3] hover:underline"
             >
-              {s.source_id ? `[${s.source_id}] ` : ''}{s.title || s.url}{s.fetched ? ' · read' : ''}
+              {s.source_id ? `[${s.source_id}] ` : ''}{s.title || s.url}{s.published_date ? ` · ${s.published_date}` : ''}{s.fetched ? ' · read' : ''}
             </a>
           </TaskItem>
         ))}
@@ -278,9 +290,22 @@ function SourcePins({ sources }: { sources?: Message['sources'] }): React.JSX.El
     <Sources>
       <SourcesTrigger count={sources.length} />
       <SourcesContent>
-        {sources.map((s, i) => (
-          <Source key={i} href={s.url} title={s.title || s.url} />
-        ))}
+        <div className="space-y-2">
+          {sources.map((source, index) => (
+            <article key={source.source_id || index} className="rounded-lg border border-border p-3">
+              <a href={source.url} target="_blank" rel="noreferrer"
+                className="text-sm font-medium hover:underline">
+                {source.source_id ? `[${source.source_id}] ` : ''}{source.title || source.url}
+              </a>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                {source.host || source.url}
+                {source.published_date ? ` · ${source.published_date}` : ''}
+                {source.fetched ? ' · page read' : ''}
+              </p>
+              {source.snippet && <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">{source.snippet}</p>}
+            </article>
+          ))}
+        </div>
       </SourcesContent>
     </Sources>
   )
@@ -1129,7 +1154,8 @@ export default function ChatArea({
                             ) : (
                               <>
                                 <AttachmentBlocks attachments={message.attachments} />
-                                <SearchTrace tool={message.tool} sources={message.sources} />
+                                <SearchTrace tool={message.tool} sources={message.sources}
+                                  queries={message.queries} researchPlan={message.researchPlan} />
                                 <ThinkingBlock thinking={message.thinking} />
                                 {renderReplyBody(message, isStreamingMessage)}
                               </>

@@ -1,3 +1,10 @@
+## Release pipeline
+
+A version-matching `v*` tag triggers offline backend tests, desktop typechecking
+and tests, an Apple Silicon bundle build, embedded-server smoke test, code-signature
+verification, and DMG integrity/SHA-256 checks. GitHub publishes the release only
+after those gates pass.
+
 ## Install on Apple Silicon
 
 This free release is ad-hoc signed and is not notarized, so macOS will show a

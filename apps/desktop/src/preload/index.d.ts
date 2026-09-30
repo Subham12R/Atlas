@@ -24,13 +24,12 @@ export interface Api {
   saveDocument: (request: {
     draftId: string; filename: string; content: string; destinationToken: string; overwrite?: boolean
   }) => Promise<{ status: 'saved' | 'exists'; path: string; duplicate?: boolean }>
-  getBackendUrl: () => Promise<string | null>
+  getBackendConnection: () => Promise<{ url: string; token: string } | null>
   getProfile: () => Promise<Profile>
   setProfile: (profile: Profile) => Promise<void>
   hasAppPassword: () => Promise<boolean>
   setAppPassword: (password: string | null) => Promise<void>
   verifyAppPassword: (password: string) => Promise<boolean>
-  getBackendToken: () => Promise<string>
   getLocalRuntimeStatus: (runtimeId: LocalRuntimeId) => Promise<LocalRuntimeStatus>
   startLocalRuntime: (runtimeId: LocalRuntimeId) => Promise<LocalRuntimeStatus>
   stopLocalRuntime: (runtimeId: LocalRuntimeId) => Promise<LocalRuntimeStatus>

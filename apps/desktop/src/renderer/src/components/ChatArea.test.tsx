@@ -7,9 +7,9 @@ afterEach(() => {
   Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
 })
 
-it('shows a degraded state when local API authentication is unavailable', async () => {
+it('shows a degraded state when the local API is unavailable', async () => {
   vi.stubGlobal('api', {
-    getBackendToken: async () => {
+    getBackendConnection: async () => {
       throw new Error('unconfigured')
     }
   })
@@ -25,10 +25,7 @@ it('shows a degraded state when local API authentication is unavailable', async 
       onStopSending={vi.fn()}
     />
   )
-  expect(await screen.findByRole('alert')).toHaveProperty(
-    'textContent',
-    expect.stringContaining('authentication unavailable')
-  )
+  expect((await screen.findByRole('alert')).textContent).toContain('authentication is unavailable')
 })
 
 it('passes the selected mode and existing prompt fields to its parent', async () => {
@@ -46,7 +43,7 @@ it('passes the selected mode and existing prompt fields to its parent', async ()
         )
     )
   )
-  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal('api', { getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }) })
   const onSendMessage = vi.fn()
   render(
     <ChatArea
@@ -75,7 +72,7 @@ it('passes the selected mode and existing prompt fields to its parent', async ()
 })
 
 it('filters connected models from the composer and sends the selected local model without logos', async () => {
-  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal('api', { getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }) })
   vi.stubGlobal(
     'fetch',
     vi.fn<typeof globalThis.fetch>(
@@ -126,7 +123,7 @@ it('filters connected models from the composer and sends the selected local mode
 
 it('uses a neutral assistant glyph instead of a model brand in replies', async () => {
   Element.prototype.scrollIntoView = vi.fn()
-  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal('api', { getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }) })
   vi.stubGlobal(
     'fetch',
     vi.fn<typeof globalThis.fetch>(
@@ -179,7 +176,7 @@ it('uses a neutral assistant glyph instead of a model brand in replies', async (
 })
 
 it('keeps an unconfigured prompt until a model is connected', async () => {
-  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal('api', { getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }) })
   vi.stubGlobal(
     'fetch',
     vi.fn<typeof globalThis.fetch>(
@@ -223,7 +220,7 @@ it('keeps an unconfigured prompt until a model is connected', async () => {
 
 it('shows the loading state only while a reply is pending', async () => {
   Element.prototype.scrollIntoView = vi.fn()
-  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal('api', { getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }) })
   vi.stubGlobal(
     'fetch',
     vi.fn<typeof globalThis.fetch>(

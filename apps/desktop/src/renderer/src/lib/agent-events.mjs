@@ -17,7 +17,13 @@ export function decodeAgentEvent(line) {
   if (!line.startsWith('data: ')) return null
   try {
     const event = JSON.parse(line.slice(6))
-    return event && typeof event === 'object' && EVENT_TYPES.has(event.type) ? event : null
+    if (!event || typeof event !== 'object') return null
+    if (!EVENT_TYPES.has(event.type)) {
+      console.warn('Ignoring unknown agent event type',
+        typeof event.type === 'string' ? event.type.slice(0, 80) : typeof event.type)
+      return null
+    }
+    return event
   } catch {
     return null
   }

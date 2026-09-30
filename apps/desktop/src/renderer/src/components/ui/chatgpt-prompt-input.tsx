@@ -326,7 +326,7 @@ const toolsList: ToolItem[] = [
   { id: 'draftDocument', name: 'Draft document', shortName: 'Draft', icon: PencilIcon },
   {
     id: 'deepResearch',
-    name: 'Research (one web search)',
+    name: 'Research (multi-query, cited sources)',
     shortName: 'Research',
     icon: TelescopeIcon
   },

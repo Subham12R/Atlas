@@ -1,13 +1,15 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { sendAgentStream, sendMessage, sendMessageStream } from './api'
 
+const localConnection = () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' })
+
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
 })
 
 it('sends the app-held token on both plain and streamed requests', async () => {
-  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal('api', { getBackendConnection: async () => localConnection() })
   const fetch = vi.fn<typeof globalThis.fetch>(
     async () => new Response('{"text":"ok","provider":"local","meta":null}')
   )
@@ -21,11 +23,11 @@ it('sends the app-held token on both plain and streamed requests', async () => {
   }
 })
 
-it('never sends the local bearer token to a non-loopback backend', async () => {
+it('never sends the local bearer token to a non-loopback development backend', async () => {
   vi.stubEnv('VITE_API_BASE_URL', 'https://untrusted.example')
   vi.resetModules()
   const { sendMessage: sendWithOverride } = await import('./api')
-  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal('api', { getBackendConnection: async () => localConnection() })
   const fetch = vi.fn()
   vi.stubGlobal('fetch', fetch)
 
@@ -36,11 +38,11 @@ it('never sends the local bearer token to a non-loopback backend', async () => {
 it('uses the bundled backend URL and token on its allocated loopback port', async () => {
   vi.stubEnv('DEV', false)
   vi.resetModules()
-  const getBackendToken = vi.fn(async () => 'fixture-token')
-  vi.stubGlobal('api', {
-    getBackendUrl: async () => 'http://127.0.0.1:43127',
-    getBackendToken
-  })
+  const getBackendConnection = vi.fn(async () => ({
+    url: 'http://127.0.0.1:43127',
+    token: 'fixture-token'
+  }))
+  vi.stubGlobal('api', { getBackendConnection })
   const fetch = vi.fn<typeof globalThis.fetch>(
     async () =>
       new Response(JSON.stringify({ text: 'ok', provider: 'local', meta: null }), {
@@ -54,28 +56,25 @@ it('uses the bundled backend URL and token on its allocated loopback port', asyn
 
   expect(fetch.mock.calls[0]?.[0]).toBe('http://127.0.0.1:43127/sessions/session-1/messages')
   expect(fetch.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: 'Bearer fixture-token' })
-  expect(getBackendToken).toHaveBeenCalledOnce()
+  expect(getBackendConnection).toHaveBeenCalledOnce()
 })
 
-it('rejects a non-loopback bundled backend before requesting the token', async () => {
+it('rejects a non-loopback bundled backend before issuing a request', async () => {
   vi.stubEnv('DEV', false)
   vi.resetModules()
-  const getBackendToken = vi.fn(async () => 'fixture-token')
   vi.stubGlobal('api', {
-    getBackendUrl: async () => 'https://untrusted.example',
-    getBackendToken
+    getBackendConnection: async () => ({ url: 'https://untrusted.example', token: 'fixture-token' })
   })
   const fetch = vi.fn()
   vi.stubGlobal('fetch', fetch)
   const { sendMessage: sendBundled } = await import('./api')
 
   await expect(sendBundled('session-1', 'private')).rejects.toMatchObject({ status: 403 })
-  expect(getBackendToken).not.toHaveBeenCalled()
   expect(fetch).not.toHaveBeenCalled()
 })
 
 it('sends the selected mode with streamed prompt and images', async () => {
-  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal('api', { getBackendConnection: async () => localConnection() })
   const fetch = vi.fn<typeof globalThis.fetch>(
     async () => new Response('data: {"text":"hello"}\n\n')
   )
@@ -103,7 +102,7 @@ it('sends the selected mode with streamed prompt and images', async () => {
 })
 
 it('sends the local bearer token with agent stream requests', async () => {
-  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal('api', { getBackendConnection: async () => localConnection() })
   const fetch = vi.fn<typeof globalThis.fetch>(
     async () => new Response('data: {"type":"run.completed","status":"completed"}\n\n')
   )
@@ -120,7 +119,7 @@ it('sends the local bearer token with agent stream requests', async () => {
 })
 
 it('defaults plain-message requests to Auto without adding images', async () => {
-  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal('api', { getBackendConnection: async () => localConnection() })
   const fetch = vi.fn<typeof globalThis.fetch>(
     async () =>
       new Response(JSON.stringify({ text: 'ok', provider: 'local', meta: null }), {

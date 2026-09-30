@@ -49,12 +49,18 @@ precedence over `.env` without needing a restart.
 
 ## Run the HTTP API
 
+Set a random `ATLAS_API_TOKEN` (at least 32 ASCII characters) in the server
+process environment. The development Electron process must receive the same
+token. Packaged builds generate a new one at each launch. Without an explicit
+shared token the standalone server generates an unreachable per-process token
+and rejects clients; no anonymous fallback is available.
+
 ```powershell
 $env:ATLAS_API_TOKEN = python -c "import secrets; print(secrets.token_hex(32))"
 uvicorn api:app --reload
 ```
 
-Set `ATLAS_API_TOKEN` to a random 32+ character secret before starting uvicorn. Every route (including `/docs`) requires `Authorization: Bearer <token>`; packaged Electron generates and passes a per-run token automatically. Development desktop and server must inherit the same token. CORS permits only the desktop's file origin (`null`) and local Vite on port 5173; localhost access alone is not authorization.
+Set `ATLAS_API_TOKEN` to a random 32+ character secret before starting uvicorn. Every route, including `/docs` and `/openapi.json`, requires `Authorization: Bearer <token>`; packaged Electron generates and passes a per-run token automatically. Development desktop and server must inherit the same token. CORS permits only the desktop's file origin (`null`) and local Vite on port 5173; localhost access alone is not authorization.
 
 | Method | Path | Purpose |
 |---|---|---|

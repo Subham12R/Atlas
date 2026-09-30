@@ -10,7 +10,7 @@ afterEach(() => {
 it('sends the chosen mode on the actual streamed turn request', async () => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal('api', {
-    getBackendToken: async () => 'fixture-token',
+    getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }),
     getChats: async () => [],
     getProfile: async () => ({ name: '', avatarDataUrl: null }),
     setChats: async () => {}

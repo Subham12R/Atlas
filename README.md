@@ -36,7 +36,7 @@ Atlas is a two-tier application:
 
 The desktop app talks to the backend over HTTP (`http://127.0.0.1:8000` by default). The backend exposes a single, provider-agnostic contract — the UI never imports provider SDKs directly.
 
-Design goal: **nothing above the adapter layer knows or cares which LLM provider is live.** Everything talks to one small interface (`init` / `send` / `send_stream` / `close` / `new_chat`).
+Design goal: **nothing above the adapter layer needs provider-specific SDK logic.** Ordinary chat uses the stable `init` / `send` / `send_stream` / `close` / `new_chat` contract; agent runs use normalized `TurnMessage` and bounded tool-call contracts where the selected model advertises support.
 
 ---
 
@@ -49,8 +49,11 @@ Design goal: **nothing above the adapter layer knows or cares which LLM provider
 - **Token streaming** — SSE endpoint for live reply rendering in the UI
 - **Vision input** — attach images to prompts (all chat adapters support image input)
 - **Image generation** — OpenAI (`gpt-image-1`) and Gemini (`imagen-4.0-generate-001`) via `POST /images/generate`
-- **Web search** — Tavily-backed real internet search, folded into prompts with source pins in the UI
-- **Research mode** — the same Tavily search cast over a wider net (more results, a "research thoroughly" prompt instruction) — not a separate multi-step agent
+- **Web search** — one bounded Tavily query (up to 5 displayed results) with source IDs, citations, and cancellation
+- **Research mode** — plans up to 3 queries, keeps 12 unique results, reads at most 3 public pages, and validates citations within a 90-second run; selected text files stay local to that run
+- **Safe tools** — bounded read-only provider tool calls for supported OpenAI, Anthropic, and Gemini models; no shell, arbitrary paths, or code execution
+- **Plan and Write modes** — visible plan outline and response-style writing preset; neither executes actions
+- **Document drafts** — choose a research brief, comparison, decision memo, or README; review the complete Markdown draft and destination before explicitly saving
 - **Voice typing** — mic-button dictation: records audio in the renderer and transcribes it via Groq's `whisper-large-v3-turbo` API (see [Feature flows](#feature-flows))
 - **Persistent memory (the brain)** — semantic recall, rolling summaries, and a lightweight entity/relation graph injected into every turn
 - **Provider settings UI** — save API keys, test connections, configure local LLM base URL/model from Profile → Advanced
@@ -58,9 +61,9 @@ Design goal: **nothing above the adapter layer knows or cares which LLM provider
 - **App lock screen** — optional local password protection (bcrypt, stored in Electron userData)
 - **Dark/light theme**, markdown rendering, code highlighting, HTML export
 
-### Planned / stubbed in UI
+### Not included
 
-Plan mode and structured document generation appear in the UI as disabled "coming soon" entries but are not yet implemented.
+Research Nodes/workspaces, automatic document writes, arbitrary shell/code execution, and model-selected tools for OpenRouter/local models are not available. Drafts remain chat artifacts until the user confirms a destination and save.
 
 ---
 
@@ -128,13 +131,14 @@ sequenceDiagram
 
 | Layer | File(s) | Responsibility |
 |---|---|---|
-| **Presentation** | `server/api.py` | HTTP endpoints, session registry, CORS, error mapping |
+| **Presentation** | `server/api.py` | Authenticated HTTP endpoints, session registry, error mapping |
 | **Wiring** | `server/factory.py` | Provider selection, brain config, singleton store/embedder |
 | **Memory core** | `server/brain/` | Recall, persist, summarize, graph extraction |
 | **Adapters** | `server/adapters/` | Provider-specific SDK wrappers behind `BaseAdapter` |
 | **Credentials** | `server/credentials_store.py` | SQLite key/value for API keys and local LLM settings |
 | **Chat persistence** | `server/chat_store.py` | SQLite store for the desktop app's chat library |
-| **Web search / research** | `server/websearch.py` | Tavily REST API wrapper, shared by Search-web and Research mode |
+| **Agent workflows/tools** | `server/agents/`, `server/tools/` | Run policy, bounded Research, static tool registry, safe page fetch and selected-file search |
+| **Web search / research** | `server/websearch.py` | Tavily REST API transport shared by Search and Research |
 | **Voice typing** | `server/voice.py` | Groq Whisper (`whisper-large-v3-turbo`) transcription wrapper |
 | **Desktop client** | `apps/desktop/src/renderer/src/lib/api.ts` | Typed HTTP client for all backend endpoints |
 
@@ -142,49 +146,47 @@ sequenceDiagram
 
 ## Feature flows
 
-How the four "smart" features — web search, research mode, the RAG memory layer, and voice typing — actually move data end to end. All four are triggered from the same `PromptBox` component (`apps/desktop/src/renderer/src/components/ui/chatgpt-prompt-input.tsx`) and orchestrated by `Home.tsx`; only the brain (RAG) runs on every turn regardless of tool.
+How the explicit workflows move data end to end. `PromptBox` sends a typed mode; `Home.tsx` forwards it, while the server owns tool policy, limits, provider calls, and evidence. Ordinary chat, image generation, voice transcription, and Brain memory retain their separate paths.
 
 ### 1. Web search (Tavily)
 
-Picking the **Search web** tool (or Atlas auto-detecting an image-generation intent does *not* apply here — this is the explicit tool picker) fetches real, current results before the model ever sees the prompt. Nothing about this touches the brain's vector store — search results are ephemeral context, folded into the prompt text for this one turn only.
+Selecting **Search** runs one bounded Tavily query (up to 5 results). The backend passes source records as untrusted evidence to the selected model; it does not prepend search output to the user's prompt. Results are scoped to the run, citations use server-issued `[S#]` IDs, and the renderer opens only sources attached to that assistant message. Stop/disconnect cancels the search and prevents synthesis. Search inputs are limited to 1,000 characters; `/websearch` remains a validated compatibility endpoint, but the desktop agent mode uses `/sessions/{id}/agent/stream`.
 
 ```mermaid
 sequenceDiagram
-    participant UI as PromptBox
-    participant Home as Home.tsx
+    participant UI as PromptBox/Home
     participant API as api.py
-    participant WS as websearch.py
+    participant Runner as Agent runner
+    participant Registry as Static tool registry
     participant Tavily as Tavily REST API
-    participant Chat as /sessions/{id}/messages/stream
+    participant Model as Selected adapter
 
-    UI->>Home: submit prompt (tool = "searchWeb")
-    Home->>API: POST /websearch {query, max_results: 5}
-    API->>WS: search(api_key, query, 5)
-    WS->>Tavily: POST api.tavily.com/search
-    Tavily-->>WS: [{title, url, content}, ...]
-    WS-->>API: normalized results
-    API-->>Home: {results}
-    Home->>Home: buildSearchContext(results) →<br/>prepend "[Web search results]..." to prompt
-    Home->>Chat: augmented prompt (brain recall still applies)
-    Chat-->>UI: streamed reply
-    Home->>UI: render reply + SourceTrace/SourcePins (title/url per result)
+    UI->>API: POST /sessions/{id}/agent/stream (search_web)
+    API->>Runner: validated request + cancellation signal
+    Runner->>Registry: web_search(query, max_results=5)
+    Registry->>Tavily: bounded search request
+    Tavily-->>Registry: normalized results
+    Registry-->>Runner: server-issued sources
+    Runner->>Model: separate untrusted evidence + user question
+    Model-->>Runner: answer
+    Runner-->>UI: typed progress, citations, completion
 ```
 
-Key files: `Home.tsx` (`buildSearchContext`, `IMAGE_INTENT_RE` is unrelated), `server/api.py` (`POST /websearch`), `server/websearch.py`, `ChatArea.tsx` (`SearchTrace`, `SourcePins` render the citations).
+### 2. Research mode
 
-### 2. Research mode (deep research)
+Research is a separate bounded workflow: one schema-validated planner produces 1–3 queries from the user question and recent typed conversation; Tavily requests run concurrently with at most 8 results each; results are deduplicated to 12; no more than 3 server-issued source IDs are fetched. Fetches allow public HTTP(S) text only, revalidate DNS and redirects, and cap each page at 10 seconds, 1 MiB, and 12,000 extracted characters. The entire run has a 90-second deadline.
 
-Research mode is **the same pipeline as web search**, not a separate agent — the codebase is explicit about this (see the comment above the call site in `Home.tsx`). Two things change:
+Evidence is passed separately from the prompt and explicitly treated as untrusted. Up to 5 selected text files may be searched locally; file contents never enter Tavily queries. Inline web citations use `[S#]`, local-file citations use `[A#]`. Unknown IDs are removed; citation repair runs at most once, and missing/invalid citations or failed evidence mark the run partial. This structural check confirms ID existence, not claim truth.
 
-| | Search web | Research mode |
-|---|---|---|
-| `max_results` sent to Tavily | 5 | 8 |
-| Prompt instruction (`applyTool`) | *"Search the web for current, up-to-date information..."* | *"Do deep, thorough research covering multiple angles and sources..."* |
-| UI trace label | "Searched the web" | "Researched the web" |
+The UI shows the query plan, result/fetch counts, source cards, and partial/error states. Raw pages and tool arguments are not sent to Brain memory; one user question and one final answer are persisted for the logical turn. Stopping or disconnecting prevents subsequent work.
 
-Everything downstream — folding results into the prompt, brain recall, streaming, source pins — is identical to the web search flow above. There is no multi-step planning, sub-query decomposition, or iterative crawling; "deep" here means a wider single Tavily call plus a prompt nudge for the model to synthesize more thoroughly.
+### 3. Safe tools and document drafts
 
-### 3. RAG / persistent memory (the brain)
+**Safe tools** is a per-message, read-only grant. It exposes only statically registered tools: public search/page fetch when no Brain or selected files are in scope, or current-thread memory and selected-file reads when private context is in scope. Search and Research remain the routes for public web queries with private context. The server enforces model capability, input schemas, call IDs, allowed names, a 4-round/6-call budget, a 90-second deadline, and output limits. Only the listed OpenAI, Anthropic, and Gemini models are enabled; OpenRouter and local models remain disabled. There is no shell, arbitrary code, SQL, disk-path access, or automatic write.
+
+**Draft document** returns a Markdown chat artifact in one of four templates: research brief, comparison, decision memo, or README. It has no disk side effect. The user can review the complete content, choose a destination in Electron's native save dialog, see the selected path, and explicitly confirm save/replace. Electron main validates the filename and content, writes a temporary file in the destination directory, and atomically creates or replaces the selected file. The model never supplies an absolute path.
+
+### 4. RAG / persistent memory (the brain)
 
 Unlike search and voice, **the brain runs on every chat turn** (when `BRAIN_ENABLED=1`), independent of which tool (if any) is selected. It wraps whichever provider adapter is active behind the same `BaseAdapter` interface, so nothing upstream needs to know memory exists.
 
@@ -212,13 +214,13 @@ sequenceDiagram
 ```
 
 Notes specific to how this interacts with the other three features:
-- **Search/research results are never embedded into `brain.db`** — they're prepended to that turn's prompt only. What *does* land in memory is the assistant's synthesized reply (which incorporates the search findings), so those facts become recallable indirectly in later turns.
+- **Raw Search/Research pages and tool arguments are not embedded into `brain.db`.** An agent turn stores the original user question and final assistant answer once; the answer can still contain evidence-based facts that may be recalled later.
 - **Voice-typed text is just text** — once transcription fills the textarea, that message goes through the exact same recall → send → persist → enrich pipeline as anything typed by hand. The brain has no idea it originated from audio.
 - If the summarizer provider isn't configured, enrichment is skipped and the turn still gets recall + persistence (RAG-only degradation — see [The brain](#the-brain-persistent-memory)).
 
 Full detail on chunking, embeddings, and the entity graph: [The brain (persistent memory)](#the-brain-persistent-memory).
 
-### 4. Voice typing (Groq Whisper)
+### 5. Voice typing (Groq Whisper)
 
 The browser's built-in `SpeechRecognition` (`webkitSpeechRecognition`) doesn't work in Electron — its backend is Google's speech service, gated behind an API key baked into official Chrome builds only, so it fails with a `network` error in any Chromium embedder. Voice typing instead records real audio locally and transcribes it server-side via Groq's Whisper API.
 
@@ -325,7 +327,7 @@ async def new_chat() -> None                      # drop conversation context
 | OpenRouter | `openrouter_adapter.py` | OpenAI-compatible, `base_url` override | `OPENROUTER_API_KEY` |
 | Local | `local_adapter.py` | OpenAI-compatible, user `base_url` | none (defaults to Ollama at `http://localhost:11434/v1`) |
 
-Adding a provider: subclass `BaseAdapter`, add one branch to `build_adapter()` in `factory.py`. The API picks it up automatically.
+Agent tool support is model-specific: OpenAI supports fragmented streamed arguments; Anthropic and Gemini normalize complete tool calls; OpenRouter and local models advertise no native tool support. Adding a provider requires an adapter, factory wiring, and an explicit capability entry in `/providers` before the UI offers safe tools.
 
 ---
 
@@ -343,7 +345,7 @@ Atlas/
 │           └── pages/         Home, About
 │
 ├── server/                    Python FastAPI backend
-│   ├── api.py                 HTTP layer (endpoints, sessions, CORS)
+│   ├── api.py                 HTTP layer (endpoints, sessions, bearer auth)
 │   ├── factory.py             Provider wiring + brain config
 │   ├── credentials_store.py   API key persistence
 │   ├── chat_store.py          Chat library persistence
@@ -372,6 +374,13 @@ Atlas/
 
 ### 1. Start the backend
 
+Development requires the **same** random `ATLAS_API_TOKEN` (at least 32 ASCII
+characters) in the backend and desktop process environments. Generate it once
+and share it through your local environment manager; do not put it in a URL,
+commit it, or print it in logs. Packaged desktop builds create a fresh token at
+launch and pass it directly to their embedded server. All API routes require
+`Authorization: Bearer <token>`; CORS permits only the packaged desktop and local Vite origins.
+
 ```powershell
 cd server
 python -m venv .venv
@@ -382,13 +391,13 @@ $env:ATLAS_API_TOKEN = python -c "import secrets; print(secrets.token_hex(32))"
 uvicorn api:app --reload
 ```
 
-The API requires `Authorization: Bearer $ATLAS_API_TOKEN` on every route. Start the desktop from an environment with the **same** token; in development, a missing/mismatched token fails closed. The packaged desktop generates a new token for its embedded backend automatically. The interactive `/docs` page is unavailable without authenticated requests.
+Every API route requires `Authorization: Bearer $ATLAS_API_TOKEN`, including `/docs` and `/openapi.json`. Development desktop and server must inherit the same 32+ character token. The packaged desktop generates a per-launch token for its embedded backend. CORS is restricted to the desktop origin and local Vite; the bearer token is not multi-user authentication.
 
 On first run with the brain enabled, the embedding model (~50 MB) downloads once via `fastembed`, then works offline.
 
 ### 2. Start the desktop app
 
-In a separate terminal:
+In a separate terminal with the **same** `ATLAS_API_TOKEN` set:
 
 ```powershell
 cd apps\desktop
@@ -444,14 +453,14 @@ BRAIN_DB_PATH=brain.db
 **Never commit `.env`, `brain.db`, `credentials.db`, or `chats.db`.**
 
 In development, the desktop renderer uses `VITE_API_BASE_URL` (default
-`http://127.0.0.1:8000`). The local bearer token is sent only to an HTTP
-loopback backend. Packaged apps launch the bundled backend on an available
-loopback port and receive that URL from Electron; they do not depend on or reuse
-a separately running server.
+`http://127.0.0.1:8000`). The bearer token is sent only to an HTTP loopback backend. Packaged apps launch the bundled backend on an available loopback port and receive its URL and per-launch bearer token from Electron; they do not depend on or reuse a separately running server.
 
 ---
 
 ## API overview
+
+Every HTTP endpoint, including API docs, requires `Authorization: Bearer <token>`.
+CORS permits only the packaged desktop origin and local Vite.
 
 Two chat modes:
 
@@ -476,7 +485,7 @@ With the brain enabled, **both** modes write to and recall from global memory. S
 | `POST` | `/sessions/{id}/new_chat` | Reset conversation context |
 | `DELETE` | `/sessions/{id}` | Close and drop session |
 | `POST` | `/images/generate` | Standalone image generation (OpenAI, Gemini) |
-| `POST` | `/websearch` | Tavily web search (backs both Search-web and Research mode) |
+| `POST` | `/websearch` | Validated Tavily compatibility endpoint; desktop modes use the agent stream |
 | `GET/PUT/DELETE` | `/settings/search` | Tavily API key management |
 | `POST` | `/audio/transcribe` | Voice typing — transcribe recorded audio via Groq Whisper |
 | `GET/PUT/DELETE` | `/settings/voice` | Groq API key management |
@@ -533,10 +542,10 @@ No API endpoint changes required.
 
 ## Known limitations
 
-- **Session registry is in-memory and single-process** — live adapter sessions are lost on restart. Durable memory and indexed documents persist in `brain.db`. A per-run local bearer token is required, but this is not multi-user authentication or a hosted deployment.
+- **Session registry is in-memory and single-process** — live adapter sessions are lost on restart. Durable memory, indexed documents, and messages persist in `brain.db`. The per-run bearer token protects the local API, but is not multi-user authentication; a hosted deployment needs separate identity and shared session state.
 - **Brain memory is single-file SQLite** — not concurrent multi-writer. For scale, swap `MemoryStore` for Postgres + pgvector.
 - **Graph is lightweight** — single-pass triple extraction, no community detection or hierarchical summaries. Summarization costs provider quota and latency per turn (disable with `BRAIN_AUTO_SUMMARY=0`).
-- **Local-only API** — bound to loopback; CORS permits only the packaged Electron opaque origin and dev Vite origins on port 5173. A bearer token protects requests, but do not expose the API publicly or treat the token as multi-user authorization.
+- **Local-only API** — bound to loopback; CORS permits only the packaged Electron opaque origin and local Vite. Do not expose it publicly or treat the token as multi-user authorization.
 - **Windows + fastembed** — HuggingFace cache may warn about symlink privilege (`WinError 1314`) on first model download. It falls back to copy and works. Enable Developer Mode to silence it.
 
 ---

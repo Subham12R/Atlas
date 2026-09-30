@@ -16,5 +16,13 @@ test('malformed and unknown events cannot masquerade as success', () => {
   assert.deepEqual(decodeAgentEvent('data: {"type":"run.failed","reason":"no key"}'),
                    { type: 'run.failed', reason: 'no key' })
   assert.equal(decodeAgentEvent('data: {not json}'), null)
-  assert.equal(decodeAgentEvent('data: {"type":"unknown"}'), null)
+  const warnings = []
+  const warn = console.warn
+  console.warn = (...args) => warnings.push(args)
+  try {
+    assert.equal(decodeAgentEvent('data: {"type":"unknown"}'), null)
+  } finally {
+    console.warn = warn
+  }
+  assert.deepEqual(warnings, [['Ignoring unknown agent event type', 'unknown']])
 })

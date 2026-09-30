@@ -545,7 +545,9 @@ function Home(): React.JSX.Element {
                 if (event.type === 'source.found') {
                   return {
                     ...message,
-                    sources: [...(message.sources || []), event.source]
+                    sources: [...(message.sources || []).filter((source) =>
+                      source.source_id !== event.source.source_id
+                    ), event.source]
                   }
                 }
                 if (event.type === 'attachment.found') {
@@ -558,14 +560,20 @@ function Home(): React.JSX.Element {
                   return {
                     ...message,
                     sources: event.sources || message.sources,
-                    queries: event.queries,
+                    queries: event.queries || message.queries,
                     attachmentSources: event.attachments || message.attachmentSources,
                     draft: event.draft || undefined,
                     runStatus: event.status,
                     runPhase: event.reason || undefined
                   }
                 }
-                if (event.type === 'plan.ready') return { ...message, queries: event.queries, runPhase: 'Searching' }
+                if (event.type === 'plan.ready') return {
+                  ...message,
+                  queries: event.queries,
+                  researchPlan: { objective: event.objective, freshness: event.freshness,
+                    source_criteria: event.source_criteria },
+                  runPhase: 'Searching'
+                }
                 if (event.type === 'plan.degraded') return { ...message, runPhase: 'Planning degraded' }
                 if (event.type === 'tool.started') {
                   return { ...message, runPhase: event.tool === 'fetch_page' ? 'Reading sources' : 'Searching' }

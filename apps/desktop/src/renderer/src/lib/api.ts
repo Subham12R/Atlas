@@ -5,7 +5,6 @@ import type { ExecutionMode } from './modes'
 const DEVELOPMENT_API_BASE = import.meta.env.DEV
   ? import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
   : undefined
-let backendUrlPromise: Promise<string> | undefined
 
 export interface ProviderInfo {
   provider: string
@@ -40,13 +39,37 @@ export class ApiError extends Error {
   }
 }
 
-async function getApiBaseUrl(): Promise<string> {
-  if (DEVELOPMENT_API_BASE) return DEVELOPMENT_API_BASE
-  backendUrlPromise ??= window.api.getBackendUrl().then((url) => {
-    if (!url) throw new ApiError(0, 'The bundled Atlas server is unavailable.')
-    return url
-  })
-  return backendUrlPromise
+async function getApiConnection(): Promise<{ url: string; token: string }> {
+  let connection: { url: string; token: string } | null
+  try {
+    connection = await window.api.getBackendConnection()
+  } catch {
+    throw new ApiError(503, 'Local API authentication is unavailable; check ATLAS_API_TOKEN in development.')
+  }
+  if (!connection?.url || !connection.token) {
+    throw new ApiError(503, 'Local API authentication is unavailable; check ATLAS_API_TOKEN in development.')
+  }
+  const url = DEVELOPMENT_API_BASE || connection.url
+  let backend: URL
+  try {
+    backend = new URL(url)
+  } catch {
+    throw new ApiError(403, 'Local API credentials cannot be sent to a non-local backend.')
+  }
+  const isLoopback =
+    backend.protocol === 'http:' &&
+    !backend.username &&
+    !backend.password &&
+    backend.pathname === '/' &&
+    !backend.search &&
+    !backend.hash &&
+    (import.meta.env.DEV
+      ? backend.port === '8000' && ['127.0.0.1', 'localhost'].includes(backend.hostname)
+      : backend.port !== '' && backend.hostname === '127.0.0.1')
+  if (!isLoopback) {
+    throw new ApiError(403, 'Local API credentials cannot be sent to a non-local backend.')
+  }
+  return { url: backend.href.replace(/\/$/, ''), token: connection.token }
 }
 
 /** Thrown instead of ApiError when the request was deliberately aborted
@@ -67,41 +90,8 @@ export function friendlyErrorMessage(err: unknown, fallback: string): string {
   return fallback
 }
 
-async function authHeaders(apiBaseUrl: string): Promise<{ Authorization: string }> {
-  let backend: URL
-  try {
-    backend = new URL(apiBaseUrl)
-  } catch {
-    throw new ApiError(403, 'Local API credentials cannot be sent to a non-local backend.')
-  }
-  const isLoopback =
-    backend.protocol === 'http:' &&
-    !backend.username &&
-    !backend.password &&
-    backend.pathname === '/' &&
-    !backend.search &&
-    !backend.hash &&
-    (import.meta.env.DEV
-      ? backend.port === '8000' && ['127.0.0.1', 'localhost'].includes(backend.hostname)
-      : backend.port !== '' && backend.hostname === '127.0.0.1')
-  if (!isLoopback) {
-    throw new ApiError(403, 'Local API credentials cannot be sent to a non-local backend.')
-  }
-  try {
-    const token = await window.api.getBackendToken()
-    if (token) return { Authorization: `Bearer ${token}` }
-  } catch {
-    // The local backend is unavailable or development authentication is not configured.
-  }
-  throw new ApiError(
-    503,
-    'Local API authentication unavailable; check ATLAS_API_TOKEN in development.'
-  )
-}
-
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const apiBaseUrl = await getApiBaseUrl()
-  const authorization = await authHeaders(apiBaseUrl)
+  const { url, token } = await getApiConnection()
   let res: Response | undefined
   let lastError: unknown
   // The packaged Electron app may render shortly before its embedded FastAPI
@@ -110,9 +100,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     if (options.signal?.aborted) throw new ApiAborted('request aborted')
     try {
-      res = await fetch(`${apiBaseUrl}${path}`, {
+      res = await fetch(`${url}${path}`, {
         ...options,
-        headers: { 'Content-Type': 'application/json', ...options.headers, ...authorization }
+        headers: { 'Content-Type': 'application/json', ...options.headers,
+          Authorization: `Bearer ${token}` }
       })
       break
     } catch (err) {
@@ -194,11 +185,10 @@ export async function sendMessageStream(
   signal?: AbortSignal,
   mode: ExecutionMode = 'auto'
 ): Promise<void> {
-  const apiBaseUrl = await getApiBaseUrl()
-  const authorization = await authHeaders(apiBaseUrl)
-  const res = await fetch(`${apiBaseUrl}/sessions/${sessionId}/messages/stream`, {
+  const { url, token } = await getApiConnection()
+  const res = await fetch(`${url}/sessions/${sessionId}/messages/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authorization },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ prompt, images: images?.length ? images : undefined, mode }),
     signal
   })
@@ -287,12 +277,11 @@ export async function sendAgentStream(
   onEvent: (event: AgentEvent) => void,
   signal: AbortSignal
 ): Promise<void> {
-  const apiBaseUrl = await getApiBaseUrl()
-  const authorization = await authHeaders(apiBaseUrl)
+  const { url, token } = await getApiConnection()
   if (signal.aborted) throw new ApiAborted('request aborted')
-  const res = await fetch(`${apiBaseUrl}/sessions/${sessionId}/agent/stream`, {
+  const res = await fetch(`${url}/sessions/${sessionId}/agent/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authorization },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
     signal
   })
@@ -443,12 +432,6 @@ export function generateImage(
 }
 
 // ---- web search (Tavily) -------------------------------------------------
-export interface SearchResult {
-  title: string
-  url: string
-  content: string
-}
-
 export function getSearchSettings(): Promise<{ configured: boolean }> {
   return request('/settings/search')
 }
@@ -462,18 +445,6 @@ export function setSearchSettings(apiKey: string): Promise<{ ok: boolean }> {
 
 export function deleteSearchSettings(): Promise<{ ok: boolean }> {
   return request('/settings/search', { method: 'DELETE' })
-}
-
-export function webSearch(
-  query: string,
-  maxResults = 5,
-  signal?: AbortSignal
-): Promise<{ results: SearchResult[] }> {
-  return request('/websearch', {
-    method: 'POST',
-    signal,
-    body: JSON.stringify({ query, max_results: maxResults })
-  })
 }
 
 // ---- voice typing (Groq Whisper) ------------------------------------------

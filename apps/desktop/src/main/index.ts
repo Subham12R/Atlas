@@ -2,6 +2,7 @@ import { app, shell, BrowserWindow, ipcMain, dialog, type IpcMainInvokeEvent } f
 import { spawn, type ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
 import { basename, join } from 'path'
+import { pathToFileURL } from 'url'
 import bcrypt from 'bcryptjs'
 import { writeFile, rm, readFile, mkdir, rename, open, lstat } from 'fs/promises'
 import { tmpdir } from 'os'
@@ -9,6 +10,8 @@ import { randomBytes, randomUUID } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { getFreeLoopbackPort } from './loopback-port.mjs'
 import { resolveDestinationSelection, saveDocumentAtomically, validateDraftFilename } from './document-save.mjs'
+import { isExternalWebUrl } from './external-url.mjs'
+import { isTrustedRendererUrl } from './renderer-origin.mjs'
 import icon from '../../resources/icon.png?asset'
 import { checkOllamaHealth, createLocalRuntimeManager } from './localRuntime'
 
@@ -50,8 +53,21 @@ interface User {
   responseStyle?: string
 }
 
-const documentDestinations = new Map<string, { draftId: string; filename: string; filePath: string }>()
+const documentDestinations = new Map<string, {
+  draftId: string; filename: string; filePath: string; expiresAt: number
+}>()
 const savedDocuments = new Map<string, { path: string; hash: string }>()
+const DOCUMENT_DESTINATION_TTL_MS = 15 * 60 * 1000
+
+function pruneDocumentDestinations(): void {
+  const now = Date.now()
+  for (const [token, destination] of documentDestinations) {
+    if (destination.expiresAt <= now) documentDestinations.delete(token)
+  }
+  while (documentDestinations.size > 32) {
+    documentDestinations.delete(documentDestinations.keys().next().value!)
+  }
+}
 
 const DEFAULT_PROFILE: Profile = {
   name: '',
@@ -125,10 +141,11 @@ async function saveSession(email: string | null): Promise<void> {
 }
 
 const DEVELOPMENT_BACKEND_URL = 'http://127.0.0.1:8000'
-const BACKEND_TOKEN = is.dev ? process.env.ATLAS_API_TOKEN || '' : randomBytes(32).toString('hex')
-const backendHeaders = { Authorization: `Bearer ${BACKEND_TOKEN}` }
 let backendUrl: string | null = null
+let backendToken: string | null = null
 let backendProcess: ChildProcess | null = null
+let rendererEntryUrl: string | null = null
+
 const localRuntime = createLocalRuntimeManager({
   platform: process.platform,
   arch: process.arch,
@@ -140,19 +157,26 @@ const localRuntime = createLocalRuntimeManager({
 
 function assertTrustedMainFrame(event: IpcMainInvokeEvent): void {
   const window = BrowserWindow.fromWebContents(event.sender)
-  if (!window || event.senderFrame !== window.webContents.mainFrame) {
+  const frame = event.senderFrame
+  if (
+    !window ||
+    frame !== window.webContents.mainFrame ||
+    !isTrustedRendererUrl(frame?.url, rendererEntryUrl)
+  ) {
     throw new Error('Unauthorized frame')
   }
 }
 
 async function waitForBackend(timeoutMs = 60_000): Promise<boolean> {
   const url = backendUrl
-  if (!url) return false
+  if (!url || !backendToken) return false
 
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${url}/providers`, { headers: backendHeaders })
+      const response = await fetch(`${url}/providers`, {
+        headers: { Authorization: `Bearer ${backendToken}` }
+      })
       if (response.ok) return true
     } catch {
       // The bundled server is still starting.
@@ -165,6 +189,8 @@ async function waitForBackend(timeoutMs = 60_000): Promise<boolean> {
 async function startEmbeddedBackend(): Promise<void> {
   if (is.dev) {
     backendUrl = DEVELOPMENT_BACKEND_URL
+    backendToken = process.env.ATLAS_API_TOKEN || null
+    if (!backendToken) console.error('Set ATLAS_API_TOKEN in both dev server and desktop environments')
     return
   }
   if (backendProcess) return
@@ -178,6 +204,7 @@ async function startEmbeddedBackend(): Promise<void> {
 
   const port = await getFreeLoopbackPort()
   backendUrl = `http://127.0.0.1:${port}`
+  backendToken = randomBytes(32).toString('hex')
   const dataPath = app.getPath('userData')
   await mkdir(dataPath, { recursive: true })
   const log = await open(join(dataPath, 'atlas-server.log'), 'a')
@@ -186,10 +213,10 @@ async function startEmbeddedBackend(): Promise<void> {
     env: {
       ...process.env,
       ATLAS_PORT: String(port),
+      ATLAS_API_TOKEN: backendToken,
       BRAIN_DB_PATH: join(dataPath, 'brain.db'),
       CHATS_DB_PATH: join(dataPath, 'chats.db'),
-      CREDENTIALS_DB_PATH: join(dataPath, 'credentials.db'),
-      ATLAS_API_TOKEN: BACKEND_TOKEN
+      CREDENTIALS_DB_PATH: join(dataPath, 'credentials.db')
     },
     stdio: ['ignore', log.fd, log.fd]
   })
@@ -198,6 +225,7 @@ async function startEmbeddedBackend(): Promise<void> {
     console.error(`Embedded Atlas server exited with code ${code}`)
     backendProcess = null
     backendUrl = null
+    backendToken = null
   })
 
   if (!(await waitForBackend())) {
@@ -219,10 +247,12 @@ async function getChats(): Promise<unknown[]> {
   // The renderer asks for chats immediately on startup. Retry while the
   // embedded server is coming online instead of returning an empty fallback
   // that could overwrite the persisted SQLite library.
-  if (backendUrl) {
+  if (backendUrl && backendToken) {
     for (let attempt = 0; attempt < 10; attempt += 1) {
       try {
-        const res = await fetch(`${backendUrl}/chats`, { headers: backendHeaders })
+        const res = await fetch(`${backendUrl}/chats`, {
+          headers: { Authorization: `Bearer ${backendToken}` }
+        })
         if (res.ok) {
           backendChats = (await res.json()) as unknown[]
           fetchFailed = false
@@ -264,11 +294,11 @@ async function getChats(): Promise<unknown[]> {
 
 async function setChats(chats: unknown[]): Promise<void> {
   // Sync to backend SQLite
-  if (backendUrl) {
+  if (backendUrl && backendToken) {
     try {
       const res = await fetch(`${backendUrl}/chats`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...backendHeaders },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${backendToken}` },
         body: JSON.stringify(chats)
       })
       if (res.ok) {
@@ -422,7 +452,9 @@ async function registerUser(profile: RegisterProfile): Promise<boolean> {
   return true
 }
 
-async function chooseDocumentDestination(draftId: string, filename: string) {
+async function chooseDocumentDestination(draftId: string, filename: string): Promise<
+  { canceled: true } | { canceled: false; token: string; path: string; exists: boolean }
+> {
   validateDraftFilename(filename)
   if (!/^[a-f0-9]{32}$/.test(draftId)) throw new TypeError('invalid draft ID')
   const selection = await dialog.showSaveDialog({
@@ -434,8 +466,12 @@ async function chooseDocumentDestination(draftId: string, filename: string) {
   const filePath = resolveDestinationSelection(selection)
   if (!filePath) return { canceled: true as const }
   validateDraftFilename(basename(filePath))
+  pruneDocumentDestinations()
   const token = randomUUID()
-  documentDestinations.set(token, { draftId, filename, filePath })
+  documentDestinations.set(token, {
+    draftId, filename, filePath, expiresAt: Date.now() + DOCUMENT_DESTINATION_TTL_MS
+  })
+  pruneDocumentDestinations()
   let exists = false
   try {
     await lstat(filePath)
@@ -446,7 +482,10 @@ async function chooseDocumentDestination(draftId: string, filename: string) {
   return { canceled: false as const, token, path: filePath, exists }
 }
 
-async function saveDocument(request: DocumentSaveRequest) {
+async function saveDocument(request: DocumentSaveRequest): Promise<
+  { status: 'saved' | 'exists'; path: string; duplicate?: boolean }
+> {
+  pruneDocumentDestinations()
   const selected = documentDestinations.get(request.destinationToken)
   if (!selected || selected.draftId !== request.draftId || selected.filename !== request.filename) {
     const previous = savedDocuments.get(request.draftId)
@@ -509,21 +548,26 @@ function createWindow(): void {
     mainWindow.show()
   })
 
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (url.split('#')[0] !== mainWindow.webContents.getURL().split('#')[0]) event.preventDefault()
+  mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
+    if (!isTrustedRendererUrl(targetUrl, rendererEntryUrl)) event.preventDefault()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    if (/^https?:\/\//i.test(details.url)) void shell.openExternal(details.url)
+    if (isExternalWebUrl(details.url)) {
+      void shell.openExternal(details.url).catch(() => console.warn('Could not open external web link'))
+    }
     return { action: 'deny' }
   })
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    rendererEntryUrl = process.env['ELECTRON_RENDERER_URL']
+    mainWindow.loadURL(rendererEntryUrl)
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    const entryPath = join(__dirname, '../renderer/index.html')
+    rendererEntryUrl = pathToFileURL(entryPath).href
+    mainWindow.loadFile(entryPath)
   }
 }
 
@@ -555,20 +599,15 @@ app.whenReady().then(async () => {
     assertTrustedMainFrame(event)
     return saveDocument(request)
   })
-  ipcMain.handle('get-backend-url', (event) => {
+  ipcMain.handle('get-backend-connection', (event) => {
     assertTrustedMainFrame(event)
-    return backendUrl
+    return backendUrl && backendToken ? { url: backendUrl, token: backendToken } : null
   })
   ipcMain.handle('get-profile', () => getProfile())
   ipcMain.handle('set-profile', (_event, profile: Profile) => setProfile(profile))
   ipcMain.handle('has-app-password', () => hasAppPassword())
   ipcMain.handle('set-app-password', (_event, password: string | null) => setAppPassword(password))
   ipcMain.handle('verify-app-password', (_event, password: string) => verifyAppPassword(password))
-  ipcMain.handle('get-backend-token', (event) => {
-    assertTrustedMainFrame(event)
-    if (BACKEND_TOKEN.length < 32) throw new Error('ATLAS_API_TOKEN is not configured')
-    return BACKEND_TOKEN
-  })
   ipcMain.handle('local-runtime:status', (event, runtimeId: unknown) => {
     assertTrustedMainFrame(event)
     return localRuntime.status(typeof runtimeId === 'string' ? runtimeId : '')

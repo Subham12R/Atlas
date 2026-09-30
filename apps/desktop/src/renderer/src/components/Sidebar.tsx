@@ -583,8 +583,8 @@ export default function Sidebar({
           </div>
           <h4 className="text-sm font-bold text-[#2E2E2D] dark:text-[#EAE8E3]">Web research</h4>
           <p className="text-[12px] text-[#6E6D6A] dark:text-[#9E9D9A] leading-relaxed">
-            Research currently searches the web once and summarizes up to 8 results. Multi-step
-            research and saved workspaces are planned, not available yet.
+            Research plans up to 3 web queries and reads up to 3 public pages. Results can be
+            incomplete; workspace nodes and report collections are not implemented.
           </p>
         </div>
       )}

@@ -1,8 +1,9 @@
 # Architecture
 
-Atlas is a thin stack over a set of **official-SDK provider adapters**. The
-design goal is that nothing above the adapter layer knows or cares which
-provider is live — everything talks to one small interface.
+Atlas is a thin stack over **official-SDK provider adapters**. Nothing above
+the adapter layer needs provider-specific SDK logic. Ordinary chat uses the
+stable adapter interface; agent runs use normalized messages and model-advertised
+tool capabilities.
 
 ```
                      ┌───────────────┐
@@ -20,8 +21,8 @@ provider is live — everything talks to one small interface.
                  └─────────┬───────────┘
                              ▼
                  ┌─────────────────────┐
-                 │   BaseAdapter       │   init() / send() / close() / new_chat()
-                 │   (adapters/base)   │   -> Reply(text, provider, meta)
+                 │   BaseAdapter       │   chat API + normalized run_turn()
+                 │   (adapters/base)   │   -> Reply / AdapterTurn / events
                  └─────────┬───────────┘
         ┌─────────┬────────┼────────┬────────────┐
         ▼         ▼        ▼        ▼            ▼
@@ -34,13 +35,19 @@ so `api.py` treats "adapter" and "brain-wrapped adapter" identically — see
 
 ## The contract (`adapters/base.py`)
 
-Every provider implements the same four methods:
+Every provider implements the chat methods and lifecycle:
 
 - `async init()` — set up the client. Call once.
-- `async send(prompt) -> Reply` — send a turn, return the full reply, keep
+- `async send(prompt, images) -> Reply` — send a turn, return the full reply, keep
   multi-turn context internally.
+- `async send_stream(prompt, images) -> AsyncIterator[str]` — stream ordinary chat text.
 - `async close()` — release the client.
 - `async new_chat()` — optional; drop conversation context.
+
+Agent runs use normalized `TurnMessage`/`AdapterTurn` values and a default
+`stream_turn()` event wrapper. Native tool-call capabilities are explicit and
+model-specific: OpenAI supports fragmented arguments; Anthropic and Gemini
+normalize complete calls; OpenRouter/local models do not advertise tool calls.
 
 `Reply` is a normalized dataclass — `text`, `provider`, and an opaque `meta`
 (e.g. token usage, stop reason). The `async with adapter as a:` sugar maps to
@@ -72,8 +79,8 @@ The one place that maps `(provider, model)` + configured keys → a constructed
   custom slug).
 - `build_adapter(...)` and `AuthMissing` (raised when a required key is absent).
 
-`api.py` depends only on the factory, so a new provider is one new adapter +
-one `build_adapter` branch — no API changes.
+`api.py` depends on the factory for construction. A new provider also needs an
+explicit capability entry in `/providers` before the renderer can offer safe tools.
 
 `build_brain(provider, ...)` wraps a freshly built chat adapter in a `Brain`
 backed by process-wide singletons (`get_store()`, `get_embedder()` — one db
@@ -82,7 +89,10 @@ handle, one loaded embedding model). All `BRAIN_*` config is read here.
 ## The brain (`brain/`) — the persistent memory core
 
 The brain is a `BaseAdapter`-shaped orchestrator that wraps any chat adapter and
-gives the app long-term memory across every conversation. `Brain.send(prompt)`:
+gives the app long-term memory across every conversation. `Brain.send(prompt)`
+keeps the ordinary-chat path; agent workflows use `prepare_agent_turn()` and
+`finish_agent_turn()` to recall once and persist one original-question/final-answer
+pair around any intermediate tool calls.
 
 1. **Recall** (`retriever.build_context`): embed the prompt, KNN-search all past
    chunks (`sqlite-vec`), pull the thread's rolling summary, and add 1-hop graph

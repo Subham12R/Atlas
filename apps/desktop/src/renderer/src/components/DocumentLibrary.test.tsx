@@ -5,7 +5,7 @@ import DocumentLibrary from './DocumentLibrary'
 afterEach(() => vi.unstubAllGlobals())
 
 it('indexes only a selected text file, shows source provenance, and removes its index', async () => {
-  vi.stubGlobal('api', { getBackendToken: async () => 'fixture-token' })
+  vi.stubGlobal('api', { getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }) })
   let indexed = false
   const fetch = vi.fn<typeof globalThis.fetch>(async (url, init) => {
     const path = new URL(String(url)).pathname

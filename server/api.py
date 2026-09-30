@@ -7,11 +7,10 @@ Two ways to talk to a provider:
   * Stateful session:    POST /sessions ...    (keeps multi-turn context)
 
 A stateful session is kept server-side in an in-memory registry and its calls
-are serialized with a per-session lock. HTTP requests require the per-run
+are serialized with a per-session lock. All HTTP endpoints require a per-run
 ATLAS_API_TOKEN bearer token; sessions themselves are not persistent.
 
-Run:  uvicorn api:app --reload
-Docs: http://127.0.0.1:8000/docs
+Run: set ATLAS_API_TOKEN in both development processes, then start uvicorn.
 """
 from __future__ import annotations
 
@@ -27,7 +26,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 import credentials_store
 import chat_store
@@ -35,6 +34,11 @@ import imagegen
 import voice
 import websearch
 from adapters.base import ImageInput
+from adapters.openai_adapter import OpenAIAdapter
+from adapters.anthropic_adapter import AnthropicAdapter
+from adapters.gemini_adapter import GeminiAdapter
+from tools.contracts import AgentEventAdapter, AgentTurnRequest
+from agents.runner import run_selected
 from factory import (ANON_OK, BRAIN_ENABLED, BRAIN_TOPK, IMAGE_GEN_MODELS,
                      IMAGE_GEN_PROVIDERS, MODELS, PROVIDERS, AuthMissing,
                      build_adapter, build_brain, get_embedder, get_store)
@@ -43,6 +47,11 @@ from brain.documents import Documents
 
 TAVILY_KEY = "TAVILY_API_KEY"
 GROQ_KEY = "GROQ_API_KEY"
+API_TOKEN = os.environ.get('ATLAS_API_TOKEN') or secrets.token_urlsafe(32)
+if len(API_TOKEN) < 32 or len(API_TOKEN) > 256 or not API_TOKEN.isascii() or any(
+    char.isspace() for char in API_TOKEN
+):
+    raise RuntimeError('ATLAS_API_TOKEN must be a strong ASCII token without whitespace')
 
 SESSIONS: dict[str, tuple] = {}
 
@@ -76,12 +85,13 @@ async def require_local_token(request: Request, call_next):
     origin = request.headers.get("origin")
     if origin and origin not in ALLOWED_ORIGINS:
         return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
-    token = os.environ.get("ATLAS_API_TOKEN", "")
+    token = os.environ.get("ATLAS_API_TOKEN", API_TOKEN)
     if len(token) < 32:
         return JSONResponse({"detail": "Local API authentication is not configured"}, status_code=503)
-    scheme, _, credential = request.headers.get("authorization", "").partition(" ")
-    if scheme.lower() != "bearer" or not secrets.compare_digest(credential, token):
-        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    provided = request.headers.get("authorization", "")
+    if not provided.isascii() or not secrets.compare_digest(provided, f"Bearer {token}"):
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401,
+                            headers={"WWW-Authenticate": "Bearer"})
     return await call_next(request)
 
 
@@ -137,8 +147,15 @@ class ImageGenerate(BaseModel):
 
 
 class WebSearchRequest(BaseModel):
-    query: str
-    max_results: int = 5
+    query: str = Field(min_length=1, max_length=1000)
+    max_results: int = Field(default=5, ge=1, le=8)
+
+    @field_validator("query")
+    @classmethod
+    def nonempty_query(cls, query: str) -> str:
+        if not query.strip():
+            raise ValueError("query must not be blank")
+        return query
 
 
 class SearchSettingsUpdate(BaseModel):
@@ -261,8 +278,17 @@ def _err_detail(e: Exception) -> str:
 @app.get("/providers")
 async def list_providers():
     """Provider capabilities: anonymous support + suggested model slugs."""
-    return [{"provider": p, "anonymous": p in ANON_OK, "models": MODELS.get(p, [])}
-            for p in PROVIDERS]
+    capabilities = {
+        'openai': OpenAIAdapter.capabilities,
+        'anthropic': AnthropicAdapter.capabilities,
+        'gemini': GeminiAdapter.capabilities,
+    }
+    return [{"provider": p, "anonymous": p in ANON_OK, "models": MODELS.get(p, []),
+             "capabilities": {
+                 "tool_calls": p in capabilities and capabilities[p].tool_calls,
+                 "streamed_arguments": p in capabilities and capabilities[p].streamed_arguments,
+                 "tool_models": list(capabilities[p].supported_models) if p in capabilities else []
+             }} for p in PROVIDERS]
 
 
 @app.get("/settings/providers")
@@ -439,8 +465,25 @@ async def generate_image(body: ImageGenerate):
     return {"images": images}
 
 
+async def _search_until_disconnect(request: Request, search):
+    """Cancel the upstream task when the client abandons the HTTP request."""
+    task = asyncio.create_task(search)
+    try:
+        while not task.done():
+            if await request.is_disconnected():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise asyncio.CancelledError()
+            await asyncio.wait({task}, timeout=0.1)
+        return await task
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
 @app.post("/websearch")
-async def web_search(body: WebSearchRequest):
+async def web_search(body: WebSearchRequest, request: Request):
     """Real internet search (Tavily) backing the Search-web/Research-mode
     tools. Returns titles/urls/content for the caller to fold into the prompt
     and to show as source pins under the reply -- no conversation state here,
@@ -449,9 +492,17 @@ async def web_search(body: WebSearchRequest):
     if not api_key:
         raise HTTPException(400, "no Tavily API key configured")
     try:
-        results = await websearch.search(api_key, body.query, body.max_results)
-    except Exception as e:
-        raise HTTPException(502, f"web search failed: {_err_detail(e)}")
+        results = await _search_until_disconnect(
+            request, websearch.search(api_key, body.query, body.max_results)
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(504, "web search timed out")
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise HTTPException(429, "web search rate limited")
+        raise HTTPException(502, "web search provider failed")
+    except Exception:
+        raise HTTPException(502, "web search failed")
     return {"results": results}
 
 
@@ -534,6 +585,58 @@ async def send_message_stream(sid: str, body: Message):
                 yield f"data: {json.dumps({'error': _err_detail(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.post("/sessions/{sid}/agent/stream")
+async def agent_stream(sid: str, body: AgentTurnRequest, request: Request):
+    """Stream progress without exposing tool policy or credentials to the renderer."""
+    adapter, lock = _get(sid)
+
+    async def events():
+        queue: asyncio.Queue = asyncio.Queue()
+        cancelled = asyncio.Event()
+
+        async def work():
+            async with lock:
+                def emit(event: dict) -> None:
+                    validated = AgentEventAdapter.validate_python(event)
+                    queue.put_nowait(validated.model_dump(exclude_none=True))
+
+                try:
+                    provider = adapter.provider if hasattr(adapter, 'provider') else adapter.name
+                    model = getattr(adapter.adapter if hasattr(adapter, 'adapter') else adapter,
+                                    'model', None)
+                    await run_selected(body, adapter, provider, model, emit, cancelled)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    emit({'type': 'run.cancelled'})
+                except Exception as e:
+                    reason = str(e) if 'no Tavily API key' in str(e) else 'agent run failed'
+                    emit({'type': 'run.failed', 'reason': reason})
+                finally:
+                    queue.put_nowait(None)
+
+        worker = asyncio.create_task(work())
+        try:
+            while True:
+                if await request.is_disconnected():
+                    cancelled.set()
+                    worker.cancel()
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            cancelled.set()
+            if not worker.done():
+                worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
+    return StreamingResponse(events(), media_type='text/event-stream')
 
 
 @app.post("/sessions/{sid}/new_chat")

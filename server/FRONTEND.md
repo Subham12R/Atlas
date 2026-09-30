@@ -7,13 +7,14 @@ and, when the brain is on, persists + recalls memory automatically.
 ## Running & basics
 
 - **Start:** `uvicorn api:app --reload` → base URL `http://127.0.0.1:8000`.
-- **Live OpenAPI docs:** `GET /docs` (Swagger UI) and `/openapi.json` — generate a
-  typed client from the latter if you want.
+- **OpenAPI:** `GET /openapi.json` requires the bearer header. `/docs` is also
+  protected; a normal browser tab cannot open it without a local authenticated client.
 - **Content type:** JSON in, JSON out (`Content-Type: application/json`).
-- **CORS:** enabled and permissive (`*`) for local dev, so a browser app on any
-  origin can call it. This is **dev-only** — it's locked down before any deploy.
-- **Auth:** none. This is a local personal PoC; the backend holds your API keys
-  in `.env` / `credentials.db`. **Do not expose it publicly.**
+- **CORS:** disabled. Untrusted browser origins cannot read the loopback API.
+- **Auth:** every HTTP request requires `Authorization: Bearer $ATLAS_API_TOKEN`.
+  Development server and Electron must share a strong token (32+ ASCII characters);
+  packaged Electron generates a fresh one per launch. This protects a local
+  personal app, not a publicly hosted multi-user API.
 - **No streaming.** Every response is the *complete* answer (the backend collects
   the provider's stream server-side). Expect one response per request, not tokens.
   Show a loading state — provider calls take **seconds** (and more when the brain's
@@ -165,18 +166,22 @@ FastAPI style — non-2xx returns `{ "detail": "message" }`. Handle:
 ## curl quickstart
 
 ```bash
-curl localhost:8000/providers
+curl localhost:8000/providers -H "Authorization: Bearer $ATLAS_API_TOKEN"
 
 curl -X POST localhost:8000/chat \
+  -H "Authorization: Bearer $ATLAS_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"provider":"openai","prompt":"hello"}'
 
 SID=$(curl -s -X POST localhost:8000/sessions \
+  -H "Authorization: Bearer $ATLAS_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"provider":"openai"}' | jq -r .session_id)
 curl -X POST localhost:8000/sessions/$SID/messages \
+  -H "Authorization: Bearer $ATLAS_API_TOKEN" \
   -H 'Content-Type: application/json' -d '{"prompt":"remember my name is Subham"}'
 
 curl -X POST localhost:8000/memory/search \
+  -H "Authorization: Bearer $ATLAS_API_TOKEN" \
   -H 'Content-Type: application/json' -d '{"q":"what is my name?","graph":true}'
 ```

@@ -46,29 +46,31 @@ class Brain:
                 self.summarizer = None
                 self.auto_summary = False
 
+    def prepare_agent_turn(self, prompt: str):
+        """Recall once from the real question; planner/tool messages are not user turns."""
+        return build_context(self.store, self.embedder, prompt,
+                             self.thread_id, self.topk, self.budget, self.max_distance)
+
+    async def finish_agent_turn(self, prompt: str, final_text: str, recall,
+                                safe_metadata: dict | None = None):
+        self._store_turn("user", self._memory_text(prompt))
+        self._store_turn("assistant", final_text, meta=safe_metadata)
+        if self.auto_summary:
+            await self._enrich(prompt, final_text)
+
     async def send(self, prompt: str, images=None):
-        context, recall = build_context(self.store, self.embedder, prompt,
-                                        self.thread_id, self.topk, self.budget,
-                                        self.max_distance)
+        context, recall = self.prepare_agent_turn(prompt)
         augmented = f"{context}\n\n{prompt}" if context else prompt
         if DEBUG and context:
             print(f"[brain] injected {len(context)} chars of context")
-
         reply = await self.adapter.send(augmented, images)
-
-        self._store_turn("user", self._memory_text(prompt))
-        self._store_turn("assistant", reply.text, meta=reply.meta)
+        await self.finish_agent_turn(prompt, reply.text, recall, reply.meta)
         reply.meta = {**reply.meta, "memory": recall}
-
-        if self.auto_summary:
-            await self._enrich(prompt, reply.text)
         return reply
 
     async def send_stream(self, prompt: str, images=None):
         t0 = time.monotonic()
-        context, recall = build_context(self.store, self.embedder, prompt,
-                                        self.thread_id, self.topk, self.budget,
-                                        self.max_distance)
+        context, recall = self.prepare_agent_turn(prompt)
         if DEBUG:
             print(f"[brain] recall took {time.monotonic() - t0:.2f}s"
                   f"{f' ({len(context)} chars)' if context else ''}")
@@ -86,12 +88,8 @@ class Brain:
 
         full_text = "".join(text_chunks)
 
-        self._store_turn("user", self._memory_text(prompt))
-        self._store_turn("assistant", full_text)
+        await self.finish_agent_turn(prompt, full_text, recall)
         yield {"memory": recall}
-
-        if self.auto_summary:
-            await self._enrich(prompt, full_text)
 
     @staticmethod
     def _memory_text(prompt: str) -> str:

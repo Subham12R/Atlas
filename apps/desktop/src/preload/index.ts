@@ -28,7 +28,8 @@ const api = {
     draftId: string; filename: string; content: string; destinationToken: string; overwrite?: boolean
   }): Promise<{ status: 'saved' | 'exists'; path: string; duplicate?: boolean }> =>
     ipcRenderer.invoke('save-document', request),
-  getBackendUrl: (): Promise<string | null> => ipcRenderer.invoke('get-backend-url'),
+  getBackendConnection: (): Promise<{ url: string; token: string } | null> =>
+    ipcRenderer.invoke('get-backend-connection'),
   getProfile: (): Promise<Profile> => ipcRenderer.invoke('get-profile'),
   setProfile: (profile: Profile): Promise<void> => ipcRenderer.invoke('set-profile', profile),
   hasAppPassword: (): Promise<boolean> => ipcRenderer.invoke('has-app-password'),
@@ -36,7 +37,6 @@ const api = {
     ipcRenderer.invoke('set-app-password', password),
   verifyAppPassword: (password: string): Promise<boolean> =>
     ipcRenderer.invoke('verify-app-password', password),
-  getBackendToken: (): Promise<string> => ipcRenderer.invoke('get-backend-token'),
   getLocalRuntimeStatus: (runtimeId: LocalRuntimeId): Promise<LocalRuntimeStatus> =>
     ipcRenderer.invoke('local-runtime:status', runtimeId),
   startLocalRuntime: (runtimeId: LocalRuntimeId): Promise<LocalRuntimeStatus> =>

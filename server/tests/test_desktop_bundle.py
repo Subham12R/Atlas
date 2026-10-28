@@ -35,7 +35,7 @@ class EmbeddedServerBuildTests(unittest.TestCase):
         self.assertEqual(
             command[command.index("--distpath") + 1], str(build_root / "dist")
         )
-        for package in ("fastembed", "sqlite_vec", "langchain_experimental"):
+        for package in ("fastembed", "sqlite_vec"):
             self.assertIn(package, command[command.index("--collect-all") + 1 :])
 
 

@@ -6,14 +6,50 @@ import { cn } from '@/lib/utils'
 import {
   deleteDocument,
   friendlyErrorMessage,
+  getMemoryStatus,
   ingestDocument,
   listDocuments,
   searchDocuments,
   type DocumentHit,
-  type IndexedDocument
+  type IndexedDocument,
+  type MemoryStatus
 } from '@/lib/api'
+import { MAX_PDF_BYTES, PdfTextError, extractPdfText, isPdf } from '@/lib/pdf-text'
 
 const MAX_BYTES = 1024 * 1024
+
+/** Text files from other apps are often UTF-16 (with a BOM) or Windows-1252
+ * rather than UTF-8; decode those instead of rejecting them. */
+export function decodeTextFile(bytes: ArrayBuffer): { text: string; encoding: string } {
+  const view = new Uint8Array(bytes)
+  if (view[0] === 0xff && view[1] === 0xfe) {
+    return { text: new TextDecoder('utf-16le').decode(view), encoding: 'UTF-16' }
+  }
+  if (view[0] === 0xfe && view[1] === 0xff) {
+    return { text: new TextDecoder('utf-16be').decode(view), encoding: 'UTF-16' }
+  }
+  try {
+    // TextDecoder drops a UTF-8 BOM by default.
+    return { text: new TextDecoder('utf-8', { fatal: true }).decode(view), encoding: 'UTF-8' }
+  } catch {
+    return { text: new TextDecoder('windows-1252').decode(view), encoding: 'Windows-1252' }
+  }
+}
+
+function semanticStatus(status: MemoryStatus | null): string {
+  if (!status) return ''
+  const model = status.model === 'google/embeddinggemma-2' ? 'EmbeddingGemma 2' : status.model
+  if (status.state === 'loading') {
+    return `Preparing ${model} for semantic search (one-time download of about 350 MB). Keyword search works meanwhile.`
+  }
+  if (status.state === 'failed') {
+    return `${model} could not be loaded, so documents are matched by keywords only. Atlas retries on next launch.`
+  }
+  if (status.pending_document_chunks) {
+    return `Embedding ${status.pending_document_chunks} passage${status.pending_document_chunks === 1 ? '' : 's'} with ${model}…`
+  }
+  return status.state === 'ready' ? `Semantic search ready (${model}).` : ''
+}
 
 export default function DocumentLibrary(): React.JSX.Element {
   const [documents, setDocuments] = useState<IndexedDocument[]>([])
@@ -22,6 +58,28 @@ export default function DocumentLibrary(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
+  const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null)
+
+  // Poll while the model loads or passages are still being embedded.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let active = true
+    const poll = (): void => {
+      getMemoryStatus().then(
+        (next) => {
+          if (!active) return
+          setMemoryStatus(next)
+          if (next.state === 'loading' || next.pending_document_chunks) timer = setTimeout(poll, 3000)
+        },
+        () => {}
+      )
+    }
+    poll()
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [documents.length])
 
   useEffect(() => {
     let mounted = true
@@ -41,22 +99,41 @@ export default function DocumentLibrary(): React.JSX.Element {
   const upload = async (file: File | undefined): Promise<void> => {
     if (!file) return
     setError('')
-    if (!/\.(txt|md)$/i.test(file.name) || file.size > MAX_BYTES || file.size === 0) {
-      setError('Select a non-empty .txt or .md file up to 1 MiB.')
+    const pdf = isPdf(file)
+    if (
+      !(pdf || /\.(txt|md)$/i.test(file.name)) ||
+      file.size === 0 ||
+      file.size > (pdf ? MAX_PDF_BYTES : MAX_BYTES)
+    ) {
+      setError('Select a .pdf (up to 25 MiB) or a .txt/.md file (up to 1 MiB).')
       return
     }
     setBusy(true)
     try {
-      const text = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer())
+      const { text, encoding } = pdf
+        ? { ...(await extractPdfText(await file.arrayBuffer())), encoding: 'PDF' }
+        : decodeTextFile(await file.arrayBuffer())
+      if (!text.trim() || text.includes('\u0000')) {
+        setError(`${file.name} does not look like a text file.`)
+        return
+      }
       const { source_id } = await ingestDocument(file.name, text)
       setDocuments((previous) =>
         previous.some((doc) => doc.source_id === source_id)
           ? previous
           : [{ source_id, name: file.name, byte_size: file.size }, ...previous]
       )
-      setStatus(`${file.name} indexed.`)
+      setStatus(
+        encoding === 'UTF-8' || encoding === 'PDF'
+          ? `${file.name} indexed.`
+          : `${file.name} indexed (read as ${encoding}).`
+      )
     } catch (err) {
-      setError(friendlyErrorMessage(err, 'Could not index this UTF-8 text file.'))
+      setError(
+        err instanceof PdfTextError
+          ? `${file.name}: ${err.message}`
+          : friendlyErrorMessage(err, `Could not index ${file.name}.`)
+      )
     } finally {
       setBusy(false)
     }
@@ -96,14 +173,15 @@ export default function DocumentLibrary(): React.JSX.Element {
             Selected documents
           </h2>
           <p className="text-xs text-[#6E6D6A] dark:text-[#9E9D9A]">
-            UTF-8 .txt/.md files up to 1 MiB. Removing an index never deletes your file.
+            PDF (up to 25 MiB) or .txt/.md files (up to 1 MiB of text). Removing an index never
+            deletes your file.
           </p>
         </div>
         {/* Native file input kept for keyboard/AT; the rich label is the visible control. */}
         <input
           id="document-file"
           type="file"
-          accept=".txt,.md,text/plain,text/markdown"
+          accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
           disabled={busy}
           onChange={(event) => {
             void upload(event.target.files?.[0])
@@ -122,7 +200,7 @@ export default function DocumentLibrary(): React.JSX.Element {
         >
           <label htmlFor="document-file" aria-disabled={busy || undefined}>
             <HugeiconsIcon icon={Upload01Icon} size={14} />
-            {busy ? 'Indexing…' : 'Select a text document'}
+            {busy ? 'Indexing…' : 'Select a document'}
           </label>
         </RichButton>
       </div>
@@ -195,8 +273,14 @@ export default function DocumentLibrary(): React.JSX.Element {
           </RichButton>
         </div>
         <p className="px-1 text-[11px] text-[#9E9D9A]">
-          Matches text in indexed chunks. Documents are not yet used in chat replies.
+          This box finds exact words. In chat, Atlas also finds passages by meaning and through
+          the names they mention, and cites them as [D1], [D2] with the file and page.
         </p>
+        {semanticStatus(memoryStatus) && (
+          <p role="status" className="px-1 text-[11px] text-[#6E6D6A] dark:text-[#9E9D9A]">
+            {semanticStatus(memoryStatus)}
+          </p>
+        )}
       </form>
 
       {results.length > 0 && (

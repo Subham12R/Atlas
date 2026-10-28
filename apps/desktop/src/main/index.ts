@@ -39,11 +39,16 @@ interface Profile {
 }
 
 interface RegisterProfile {
-  email: string
   name: string
-  password: string
   avatarDataUrl: string | null
+  // Optional: onboarding only asks for a name; app lock is opt-in from Profile.
+  email?: string
+  password?: string
 }
+
+// Users are keyed by email; a profile created without one uses this key, which
+// is never shown to the user or sent to a model.
+const LOCAL_ACCOUNT_KEY = 'local'
 
 interface User {
   email: string
@@ -216,6 +221,8 @@ async function startEmbeddedBackend(): Promise<void> {
       ATLAS_PORT: String(port),
       ATLAS_API_TOKEN: backendToken,
       BRAIN_DB_PATH: join(dataPath, 'brain.db'),
+      // Downloaded once (EmbeddingGemma 2, ~350 MB) and kept with the user's data.
+      ATLAS_MODELS_DIR: join(dataPath, 'models'),
       CHATS_DB_PATH: join(dataPath, 'chats.db'),
       CREDENTIALS_DB_PATH: join(dataPath, 'credentials.db')
     },
@@ -335,7 +342,7 @@ async function getProfile(): Promise<Profile> {
     avatarDataUrl: user.avatarDataUrl,
     memoryPrompt: user.memoryPrompt || '',
     responseStyle: user.responseStyle || 'default',
-    email: user.email
+    ...(user.email !== LOCAL_ACCOUNT_KEY ? { email: user.email } : {})
   }
 }
 
@@ -376,6 +383,12 @@ async function setProfile(profile: Profile): Promise<void> {
 
 async function hasAppPassword(): Promise<boolean> {
   const users = await getUsers()
+  // Signed in: only this profile's own lock matters. Signed out (after Logout):
+  // any locked profile needs its credentials before the app opens.
+  if (currentSessionEmail) {
+    const user = users.find((u) => u.email.toLowerCase() === currentSessionEmail?.toLowerCase())
+    if (user) return Boolean(user.passwordHash)
+  }
   return users.some((user) => Boolean(user.passwordHash))
 }
 
@@ -434,12 +447,17 @@ async function deleteAccount(): Promise<void> {
 
 async function registerUser(profile: RegisterProfile): Promise<boolean> {
   const users = await getUsers()
-  const exists = users.some((u) => u.email.toLowerCase() === profile.email.toLowerCase())
-  if (exists) return false
+  const email = profile.email?.trim().toLowerCase() || LOCAL_ACCOUNT_KEY
+  const index = users.findIndex((u) => u.email.toLowerCase() === email)
+  if (index !== -1) {
+    // Re-running onboarding (e.g. after account deletion) replaces an unlocked local profile.
+    if (email !== LOCAL_ACCOUNT_KEY || users[index].passwordHash) return false
+    users.splice(index, 1)
+  }
 
-  const passwordHash = bcrypt.hashSync(profile.password, 10)
+  const passwordHash = profile.password ? bcrypt.hashSync(profile.password, 10) : ''
   const newUser: User = {
-    email: profile.email,
+    email,
     name: profile.name,
     avatarDataUrl: profile.avatarDataUrl,
     passwordHash,

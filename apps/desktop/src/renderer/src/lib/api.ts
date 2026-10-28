@@ -216,10 +216,35 @@ export function sendMessage(
   })
 }
 
+/** A passage from the user's indexed documents, cited in the answer as [D1], [D2], ... */
+export interface DocumentCitation {
+  source_id: string
+  document_id: string
+  name: string
+  page: number | null
+  chunk_id: number
+  /** Which retrieval signals found it: 'meaning' (vector), 'keywords' (BM25), 'graph'. */
+  via: string[]
+  excerpt: string
+}
+
 export interface MemoryRecall {
   summary: boolean
-  hits: { text: string; thread_id: string; distance: number }[]
+  /** distance is null for keyword-only matches (e.g. while the embedding model loads). */
+  hits: { text: string; thread_id: string; distance: number | null }[]
   facts: string[]
+  documents?: DocumentCitation[]
+}
+
+export interface MemoryStatus {
+  state: 'idle' | 'loading' | 'ready' | 'failed'
+  model: string
+  detail: string
+  pending_document_chunks?: number
+}
+
+export function getMemoryStatus(): Promise<MemoryStatus> {
+  return request('/memory/status')
 }
 
 export async function sendMessageStream(
@@ -384,6 +409,11 @@ export function resetSession(sessionId: string): Promise<{ ok: boolean }> {
 
 export function closeSession(sessionId: string): Promise<{ ok: boolean }> {
   return request(`/sessions/${sessionId}`, { method: 'DELETE' })
+}
+
+/** Forget what memory learned from one chat (its recall chunks, summary and facts). */
+export function deleteMemoryThread(threadId: string): Promise<void> {
+  return request(`/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' })
 }
 
 export interface IndexedDocument {

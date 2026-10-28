@@ -85,7 +85,7 @@ class SourceEvent(StrictModel):
 
 
 class AttachmentEvent(StrictModel):
-    source_id: str = Field(pattern=r'^A[1-9][0-9]*$')
+    source_id: str = Field(pattern=r'^[AD][1-9][0-9]*$')  # A = attached file, D = indexed document
     filename: str = Field(min_length=1, max_length=255)
     section: str = Field(min_length=1, max_length=100)
     attachment_id: str | None = Field(default=None, max_length=100)

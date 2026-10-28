@@ -324,6 +324,30 @@ it('links each issued source in a grouped citation and shows its source card', (
   expect(screen.getByText(/Used 2 sources/)).toBeTruthy()
 })
 
+it('labels indexed-document citations with file and page and lists only cited ones', () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('api', { getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }) })
+  vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>(async () =>
+    new Response(JSON.stringify({ local: { configured: true } }), { headers: { 'Content-Type': 'application/json' } })))
+  const doc = (source_id: string, name: string, page: number | null) => ({
+    source_id, name, page, document_id: name, chunk_id: 1, via: ['meaning'], excerpt: '' })
+  const chat: Chat = {
+    id: 'docs', title: 'Docs', isPinned: false, timestamp: '', provider: 'local',
+    sessionId: null, threadId: null,
+    messages: [{ id: 'answer', sender: 'assistant', timestamp: '', content: 'Leave is 24 days [D1].',
+      memory: { summary: false, hits: [], facts: [],
+        documents: [doc('D1', 'leave-policy.pdf', 2), doc('D2', 'trip.md', null)] } }]
+  }
+  render(<ChatArea isSidebarCollapsed={false} setIsSidebarCollapsed={vi.fn()}
+    activeChat={chat} onSendMessage={vi.fn()} onNewChat={vi.fn()}
+    onTogglePin={vi.fn()} onMessageRevealed={vi.fn()} onStopSending={vi.fn()} />)
+  // The inline marker and the cited-document chip both name the file and page.
+  expect(screen.getAllByTitle('leave-policy.pdf, page 2')[0].textContent).toBe('[D1]')
+  expect(screen.queryByTitle('trip.md, indexed document')).toBeNull() // recalled but not cited
+  const cited = screen.getByLabelText('Cited documents')
+  expect(cited.textContent).toBe('D1 · leave-policy.pdf · p. 2')
+})
+
 it('approves only checked plan steps, retries in place, and shows saved trace chips', async () => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal('api', { getBackendConnection: async () => ({ url: 'http://127.0.0.1:8000', token: 'fixture-token' }) })

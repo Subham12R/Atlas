@@ -54,6 +54,7 @@ async def main():
     await brain.send("when is my deadline?")
     injected = "BAH 2026" in chat.last_prompt
     print("recall injected prior fact into prompt:", injected)
+    await brain.flush()  # summary + graph enrichment runs after each reply
 
     n_msgs = store.con.execute("SELECT count(*) c FROM messages").fetchone()["c"]
     summary = store.get_summary("t1")

@@ -9,7 +9,7 @@ interface OnboardingProps {
   onComplete: (name: string, avatarDataUrl: string | null) => void
 }
 
-const TOTAL_STEPS = 3
+const TOTAL_STEPS = 2
 
 /** Small circular "continue" button, echoing the return-arrow on a macOS
  * lock screen's password field. */
@@ -75,9 +75,6 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
   )
   const [name, setName] = useState('')
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null)
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [isExiting, setIsExiting] = useState(false)
@@ -157,32 +154,15 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
     if (step === 2 && !name.trim()) {
       return // Name is required
     }
-    if (step === 3) {
-      if (!email.trim() || !email.includes('@')) {
-        setError('Please enter a valid email address.')
-        return
-      }
-      if (password.length < 4) {
-        setError('Password must be at least 4 characters.')
-        return
-      }
-      if (password !== confirmPassword) {
-        setError('Passwords do not match.')
-        return
-      }
-    }
 
     if (step === TOTAL_STEPS) {
       setSaving(true)
+      setError(null)
       try {
-        const ok = await window.api.registerUser({
-          email: email.trim().toLowerCase(),
-          name: name.trim(),
-          password,
-          avatarDataUrl
-        })
+        // A local profile: no email or password. App lock is optional, in Profile.
+        const ok = await window.api.registerUser({ name: name.trim(), avatarDataUrl })
         if (!ok) {
-          setError('Email is already registered.')
+          setError('Could not save your profile.')
           setSaving(false)
           return
         }
@@ -200,7 +180,7 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
         onComplete(name.trim(), avatarDataUrl)
       } catch (err) {
         console.error(err)
-        setError('Could not create account.')
+        setError('Could not save your profile.')
         setSaving(false)
         setIsExiting(false)
       }
@@ -294,28 +274,12 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
               data-gsap-line
               className="font-sans tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 max-w-4xl"
             >
-              Choose a User name and select an optional profile picture to personalize your
-              workspace.
+              Add your name and, if you like, a profile picture. Everything stays on this Mac. You
+              can set an app password later in Profile.
             </p>
           </>
         )}
 
-        {step === 3 && (
-          <>
-            <h1
-              data-gsap-line
-              className="text-3xl md:text-5xl font-medium font-sans tracking-tighter text-[#2E2E2D] dark:text-white"
-            >
-              Create your account
-            </h1>
-            <p
-              data-gsap-line
-              className="font-sans max-w-lg tracking-tighter md:text-xl text-[#6E6D6A] dark:text-white/60 "
-            >
-              Sign up with an email address and password.
-            </p>
-          </>
-        )}
       </div>
 
       {/* Sleek, bottom-docked controls -- mac-lockscreen style */}
@@ -375,92 +339,16 @@ export default function Onboarding({ onComplete }: OnboardingProps): React.JSX.E
               />
               <ContinueButton
                 onClick={handleNext}
-                disabled={!name.trim()}
+                disabled={!name.trim() || saving}
                 busy={saving}
-                label="Continue"
+                label="Finish"
               />
             </div>
-          </div>
-        )}
-
-        {step === 3 && (
-          <div className="w-full max-w-sm flex flex-col items-center gap-3">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => {
-                setEmail(e.target.value)
-                setError(null)
-              }}
-              onKeyDown={handleEnterKey}
-              placeholder="Email address"
-              className="w-full h-12 rounded-3xl px-5 text-left text-base bg-black/5 dark:bg-white/10 backdrop-blur-2xl border border-black/10 dark:border-white/20 text-[#2E2E2D] dark:text-white placeholder:text-[#9E9D9A] dark:placeholder:text-white/40 outline-none focus:border-[#2E2E2D]/40 dark:focus:border-white/50 transition-colors"
-            />
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => {
-                setPassword(e.target.value)
-                setError(null)
-              }}
-              onKeyDown={handleEnterKey}
-              placeholder="Password"
-              className="w-full h-12 rounded-3xl px-5 text-left text-base bg-black/5 dark:bg-white/10 backdrop-blur-2xl border border-black/10 dark:border-white/20 text-[#2E2E2D] dark:text-white placeholder:text-[#9E9D9A] dark:placeholder:text-white/40 outline-none focus:border-[#2E2E2D]/40 dark:focus:border-white/50 transition-colors"
-            />
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => {
-                setConfirmPassword(e.target.value)
-                setError(null)
-              }}
-              onKeyDown={handleEnterKey}
-              placeholder="Confirm password"
-              className="w-full h-12 rounded-3xl px-5 text-left text-base bg-black/5 dark:bg-white/10 backdrop-blur-2xl border border-black/10 dark:border-white/20 text-[#2E2E2D] dark:text-white placeholder:text-[#9E9D9A] dark:placeholder:text-white/40 outline-none focus:border-[#2E2E2D]/40 dark:focus:border-white/50 transition-colors"
-            />
             {error && (
-              <p className="text-xs text-[#E0533C] dark:text-red-400 self-start px-2 font-medium">
+              <p role="alert" className="text-xs text-[#E0533C] dark:text-red-400 font-medium">
                 {error}
               </p>
             )}
-            <RichButton
-              type="button"
-              onClick={handleNext}
-              disabled={!email.trim() || !password || !confirmPassword || saving}
-              className="w-full h-12 rounded-full text-base"
-            >
-              {saving ? (
-                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  />
-                </svg>
-              ) : (
-                <>
-                  <span>Continue</span>
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    className="w-4 h-4"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                  >
-                    <path d="M5 12h14" strokeLinecap="round" />
-                    <path d="M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </>
-              )}
-            </RichButton>
           </div>
         )}
 

@@ -35,7 +35,7 @@ def pyinstaller_command(
         "--collect-submodules",
         "brain",
     ]
-    for package in ("fastembed", "sqlite_vec", "langchain_experimental"):
+    for package in ("fastembed", "sqlite_vec"):
         command.extend(("--collect-all", package))
     command.append(str(server_root / "run_server.py"))
     return command

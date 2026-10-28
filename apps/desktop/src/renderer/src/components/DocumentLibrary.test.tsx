@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import DocumentLibrary from './DocumentLibrary'
+import DocumentLibrary, { decodeTextFile } from './DocumentLibrary'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -41,7 +41,7 @@ it('indexes only a selected text file, shows source provenance, and removes its 
   Object.defineProperty(file, 'arrayBuffer', {
     value: async () => new TextEncoder().encode('Unique policy').buffer
   })
-  fireEvent.change(screen.getByLabelText('Select a text document'), { target: { files: [file] } })
+  fireEvent.change(screen.getByLabelText('Select a document'), { target: { files: [file] } })
 
   await screen.findByText('notes.md')
   const uploads = fetch.mock.calls.filter(
@@ -61,4 +61,14 @@ it('indexes only a selected text file, shows source provenance, and removes its 
   expect(await screen.findByText('notes.md · chunk 7')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Remove index for notes.md' }))
   await waitFor(() => expect(screen.queryByText('notes.md')).toBeNull())
+})
+
+it('reads UTF-8, UTF-16 and Windows-1252 text files instead of rejecting them', () => {
+  const utf8 = new TextEncoder().encode('\ufeffcaf\u00e9 notes')
+  expect(decodeTextFile(utf8.buffer)).toEqual({ text: 'caf\u00e9 notes', encoding: 'UTF-8' })
+  const utf16 = new Uint8Array([0xff, 0xfe, 0x68, 0x00, 0x69, 0x00])
+  expect(decodeTextFile(utf16.buffer)).toEqual({ text: 'hi', encoding: 'UTF-16' })
+  // Smart quotes saved by Notepad/Word as Windows-1252 are not valid UTF-8.
+  const cp1252 = new Uint8Array([0x93, 0x68, 0x69, 0x94])
+  expect(decodeTextFile(cp1252.buffer)).toEqual({ text: '\u201chi\u201d', encoding: 'Windows-1252' })
 })

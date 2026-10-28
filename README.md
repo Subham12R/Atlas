@@ -1,6 +1,6 @@
 # Atlas
 
-Atlas is a local-first desktop AI assistant. Its Electron app runs a loopback FastAPI backend for chat with user-configured OpenAI, Anthropic, Gemini, OpenRouter, or an OpenAI-compatible local runtime. Optional SQLite memory adds semantic recall, summaries, and an entity graph. "Local-first" describes where the app runs, **not** a promise that a selected cloud model, Tavily search, or Groq transcription keeps data on-device.
+Atlas is a local-first desktop AI assistant. Its Electron app runs a loopback FastAPI backend for chat with user-configured OpenAI, Anthropic, Gemini, OpenRouter, a custom OpenAI-compatible cloud endpoint, or an OpenAI-compatible local runtime. Optional SQLite memory adds semantic recall, summaries, and an entity graph. "Local-first" describes where the app runs, **not** a promise that a selected cloud model, Tavily search, or Groq transcription keeps data on-device.
 <img width="1200" height="676" alt="atlas" src="https://github.com/user-attachments/assets/b0b7b393-db53-4906-a222-0b7629a21460" />
 
 ---
@@ -47,7 +47,7 @@ Design goal: **nothing above the adapter layer needs provider-specific SDK logic
 
 ### Implemented
 
-- **Multi-provider chat** — OpenAI, Anthropic, Gemini, OpenRouter, and local OpenAI-compatible servers (Ollama, LM Studio, etc.)
+- **Multi-provider chat** — OpenAI, Anthropic, Gemini, OpenRouter, a **custom cloud endpoint** (any hosted OpenAI-compatible API such as Together, Groq, DeepSeek, Fireworks or Mistral: base URL + model + key), and local OpenAI-compatible servers (Ollama, LM Studio, vLLM, etc.)
 - **Auto and explicit text modes** — deterministic per-turn classification (Research, Coding, Documentation), local-first model selection, optional cloud opt-in, and a visible route/reasoning decision; a mode label alone does not grant web access
 - **Stateful sessions** — multi-turn conversations with per-session serialization
 - **Token streaming** — SSE endpoint for live reply rendering in the UI
@@ -59,12 +59,13 @@ Design goal: **nothing above the adapter layer needs provider-specific SDK logic
 - **Coding and Documentation text modes; explicit Plan workflow** — affect task framing or produce a visible outline; none alone executes code or writes files
 - **Document drafts** — choose a research brief, comparison, decision memo, or README; review the complete Markdown draft and destination before explicitly saving
 - **Voice typing** — mic-button dictation: records audio in the renderer and transcribes it via Groq's `whisper-large-v3-turbo` API (see [Feature flows](#feature-flows))
-- **Persistent memory (the brain)** — optional semantic chat recall, rolling summaries, and a lightweight entity/relation graph; enrichment can degrade independently of replies
-- **Selected-document index** — explicitly selected UTF-8 `.txt`/`.md` files (up to 1 MiB each), searchable locally with source/chunk IDs; not automatic chat retrieval or folder crawling
+- **Persistent memory (the brain)** — optional semantic chat recall, rolling summaries, and a lightweight entity/relation graph. Memory stores the user's own words (not injected instructions or attached file bodies), summarizes with the chat's own cloud provider in the background after the reply, and deleting a chat deletes its memory
+- **Selected-document index** — explicitly selected `.txt`/`.md` files (up to 1 MiB each; UTF-8, UTF-16 and Windows-1252 are read), searchable locally by all query words with source/chunk IDs; not automatic chat retrieval or folder crawling
+- **Attachments** — up to 5 text/code files per message (5 MiB each, 10 MiB total) plus images; unsupported types such as PDF/Office are reported rather than silently dropped
 - **Local runtime control** — opt-in start/status/stop for an already-installed Ollama on macOS ARM64; Atlas stops only the process it started and never downloads models
-- **Provider settings UI** — save API keys, test connections, configure local LLM base URL/model from Profile → Advanced
+- **Provider settings UI** — save API keys, test connections, configure the custom cloud endpoint and the local LLM base URL/model from Profile → Advanced
 - **Chat library** — pin, search, and manage conversation history (synced to server-side `chats.db`)
-- **App lock screen** — optional local password protection (bcrypt, stored in Electron userData)
+- **Simple onboarding, optional app lock** — first launch asks only for a name and an optional photo (a local profile; no email or password). An app password can be set later in Profile → App lock (bcrypt, stored in Electron userData); when set, the lock screen asks only for that password and the account menu offers **Lock Atlas**
 - **Dark/light theme**, markdown rendering, code highlighting, HTML export
 
 ### Not included
@@ -218,14 +219,16 @@ sequenceDiagram
     Brain->>Brain: assemble context block (char-budgeted)
     Brain->>Adapter: send(context + prompt)
     Adapter-->>UI: streamed tokens (SSE)
-    Brain->>Store: persist user + assistant turns (chunked + embedded)
-    Brain->>Sum: update_summary() + extract_triples() [best-effort]
+    Brain->>Store: persist user + assistant turns (chunked + embedded off the event loop)
+    Brain-->>Sum: update_summary() + extract_triples() [background, best-effort]
     Sum-->>Store: rolling summary + (subject, relation, object) triples
 ```
 
 Notes specific to how this interacts with the other three features:
 - **Raw Search/Research pages and tool arguments are not embedded into `brain.db`.** An agent turn stores the original user question and final assistant answer once; the answer can still contain evidence-based facts that may be recalled later.
 - **Voice-typed text is just text** — once transcription fills the textarea, that message goes through the exact same recall → send → persist → enrich pipeline as anything typed by hand. The brain has no idea it originated from audio.
+- **Attached files are remembered by name** (`[Attached: notes.md]`), not by content, so a large attachment never stalls the server or floods recall. Instruction blocks the app adds (formatting rules, personalization) are stripped before a turn is stored or used as a recall query.
+- **Deleting a chat deletes its memory** (`DELETE /threads/{id}`): its recall chunks, summary, and facts no other chat still references.
 - If the summarizer provider isn't configured, enrichment is skipped and the turn still gets recall + persistence (RAG-only degradation — see [The brain](#the-brain-persistent-memory)).
 
 Full detail on chunking, embeddings, and the entity graph: [The brain (persistent memory)](#the-brain-persistent-memory).
@@ -308,7 +311,7 @@ All knobs live in `.env` (see `server/.env.example`):
 | `ATLAS_LOCAL_AGENT_TIMEOUT_SECONDS` | `180` | Local agent/research deadline (90–300 seconds); slow models may still time out |
 | `BRAIN_ENABLED` | `1` | `0` = plain adapters, no memory |
 | `BRAIN_AUTO_SUMMARY` | `1` | `0` = RAG only (no LLM summary/graph, saves quota) |
-| `BRAIN_SUMMARIZER` | `openai` | Provider used for summary + graph extraction |
+| `BRAIN_SUMMARIZER` | *(empty)* | Provider for summary + graph extraction; empty = the chat's own cloud provider, local chats RAG-only |
 | `BRAIN_TOPK` | `6` | Semantic hits injected per turn |
 | `BRAIN_MAX_DISTANCE` | `0.6` | Cosine-distance cutoff for dynamic recall |
 | `BRAIN_CONTEXT_BUDGET` | `2000` | Max chars of recalled context per turn |
@@ -336,6 +339,7 @@ async def new_chat() -> None                      # drop conversation context
 | Anthropic | `anthropic_adapter.py` | `anthropic` | `ANTHROPIC_API_KEY` |
 | Gemini | `gemini_adapter.py` | `google-genai` | `GEMINI_API_KEY` |
 | OpenRouter | `openrouter_adapter.py` | OpenAI-compatible, `base_url` override | `OPENROUTER_API_KEY` |
+| Custom cloud | `custom_adapter.py` | OpenAI-compatible, user `base_url` (HTTPS unless on this computer) | `CUSTOM_BASE_URL`, `CUSTOM_MODEL`, optional `CUSTOM_API_KEY` |
 | Local | `local_adapter.py` | OpenAI-compatible, user `base_url` | none (defaults to Ollama at `http://localhost:11434/v1`) |
 
 Agent tool support is model-specific: OpenAI supports fragmented streamed arguments; Anthropic and Gemini normalize complete tool calls; OpenRouter and local models advertise no native tool support. Adding a provider requires an adapter, factory wiring, and an explicit capability entry in `/providers` before the UI offers safe tools.
@@ -427,7 +431,7 @@ On macOS/Linux use `cd apps/desktop` in the second terminal (with the same token
 
 Either edit `server/.env` before starting the backend, or from inside the app:
 
-**Profile → Advanced** — save your own provider keys, test connections (a real provider call), set a local LLM base URL/model, and on macOS ARM64 start/stop an already-installed Ollama. Auto tries a configured/discovered local model first; the model picker's **Allow cloud models in Auto** switch also permits configured cloud models when no eligible local model is available. Choosing a cloud model explicitly is another opt-in. A visible cloud model name alone is not consent.
+**Profile → Advanced** — save your own provider keys, test connections (a real provider call), add a **Custom cloud endpoint** (base URL, model ID, key) for any hosted OpenAI-compatible API, set a local LLM base URL/model, and on macOS ARM64 start/stop an already-installed Ollama. Auto tries a configured/discovered local model first; the model picker's **Allow cloud models in Auto** switch also permits configured cloud models when no eligible local model is available. Choosing a cloud model explicitly is another opt-in. A visible cloud model name alone is not consent.
 
 For Ollama (or any OpenAI-compatible local server):
 
@@ -452,6 +456,11 @@ OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 GEMINI_API_KEY=
 OPENROUTER_API_KEY=
+
+# Custom cloud endpoint (any hosted OpenAI-compatible API; HTTPS required off this computer)
+CUSTOM_BASE_URL=
+CUSTOM_MODEL=
+CUSTOM_API_KEY=
 
 # Local LLM (no key required)
 LOCAL_LLM_BASE_URL=http://localhost:11434/v1
@@ -495,7 +504,7 @@ With the brain enabled, **both** modes write to and recall from global memory. S
 |---|---|---|
 | `GET` | `/providers` | List providers, suggested models, capabilities |
 | `POST` | `/routing/turn` | Authenticated text route decision: effective mode, eligible model or refusal, reason (does not execute a turn) |
-| `GET/PUT/DELETE` | `/settings/providers[/{provider}]` | Read/write/clear API keys and local LLM settings |
+| `GET/PUT/DELETE` | `/settings/providers[/{provider}]` | Read/write/clear API keys, the custom endpoint (`custom`: `base_url`, `model`, `api_key`), and local LLM settings |
 | `POST` | `/settings/providers/{provider}/test` | Verify a provider connection with a real prompt |
 | `POST` | `/chat` | One-shot stateless chat |
 | `POST` | `/sessions` | Open a stateful multi-turn session → `session_id`, `thread_id` |
@@ -513,8 +522,9 @@ With the brain enabled, **both** modes write to and recall from global memory. S
 | `POST` | `/memory/search` | Graph-aware search (vector hits + entity facts) |
 | `GET` | `/threads/{id}/summary` | Thread rolling summary |
 | `GET` | `/threads/{id}/graph` | Thread entity/relation graph |
+| `DELETE` | `/threads/{id}` | Forget one chat's memory (called when a chat is deleted) |
 | `GET/POST/DELETE` | `/documents[/{source_id}]` | List/index/delete selected text documents; deletion leaves the original file untouched |
-| `GET` | `/documents/search?q=` | Search indexed text with source and chunk IDs |
+| `GET` | `/documents/search?q=` | Search indexed text (all words, any order; exact phrase ranked first) with source and chunk IDs |
 | `GET/POST` | `/chats` | Read/write chat library (desktop sync) |
 | `POST` | `/account/reset` | Wipe credentials, chats, and brain memory |
 
@@ -594,6 +604,7 @@ The following are **specifications, not shipped capabilities**:
 
 - **Session registry is in-memory and single-process** — live adapter sessions are lost on restart. Durable memory, indexed documents, and messages persist in `brain.db`. The per-run bearer token protects the local API, but is not multi-user authentication; a hosted deployment needs separate identity and shared session state.
 - **Brain memory is single-file SQLite** — not concurrent multi-writer. A shared cloud database is a separate, proposed architecture, not a setting to enable here.
+- **Recall threshold is untuned** — `BRAIN_MAX_DISTANCE=0.6` admits some unrelated memories with `bge-small` (unrelated text measured ~0.51–0.58, related ~0.34–0.43). Tune it against a labeled corpus before changing the default.
 - **Graph is lightweight** — single-pass triple extraction, no graph visualization UI, community detection, or hierarchical summaries. Enrichment can cost provider quota and latency; disable with `BRAIN_AUTO_SUMMARY=0`.
 - **Local-only API** — bound to loopback; CORS permits only the packaged Electron opaque origin and local Vite. Do not expose it publicly or treat the token as multi-user authorization.
 - **Windows + fastembed** — HuggingFace cache may warn about symlink privilege (`WinError 1314`) on first model download. It falls back to copy and works. Enable Developer Mode to silence it.

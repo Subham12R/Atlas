@@ -47,7 +47,7 @@ class DocumentTests(TestCase):
                          {first, second})
 
     def test_invalid_input_leaves_no_partial_records(self):
-        for name, text in [('notes.pdf', 'secret'), ('../notes.md', 'secret'),
+        for name, text in [('notes.docx', 'secret'), ('../notes.md', 'secret'),
                            ('notes.txt', 'x' * (1024 * 1024 + 1)), ('notes.md', ''),
                            ('notes.md', 'hello\x00world')]:
             with self.subTest(name=name, size=len(text)), self.assertRaises(ValueError):
@@ -82,7 +82,7 @@ class DocumentTests(TestCase):
                 'name': 'notes.md', 'text': 'Unauthorized content',
             }).status_code, 401)
             self.assertEqual(self.docs.list_documents(), [])
-            bad = client.post('/documents', headers=headers, json={'name': 'notes.pdf', 'text': 'No'})
+            bad = client.post('/documents', headers=headers, json={'name': 'notes.docx', 'text': 'No'})
             self.assertEqual(bad.status_code, 400)
             response = client.post('/documents', headers=headers,
                                    json={'name': 'notes.md', 'text': 'Unique policy note'})

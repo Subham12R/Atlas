@@ -26,9 +26,13 @@ async def memory_search(context: ToolContext, params: MemoryInput) -> ToolResult
     import factory
     if not factory.BRAIN_ENABLED or not context.thread_id:
         return ToolResult(summary='Brain memory unavailable', data={'hits': [], 'unavailable': True})
-    embedding = factory.get_embedder().embed_one(params.query)
-    hits = factory.get_store().search(embedding, k=params.top_k,
-                                      scope_thread_id=context.thread_id)
+    model, store = factory.get_embedder(), factory.get_store()
+    if model is None:  # embedding model still loading: keyword matches in this thread
+        hits = [(text, thread_id, None) for _, text, thread_id in
+                store.keyword_search(params.query, params.top_k, scope_thread_id=context.thread_id)]
+    else:
+        hits = store.search(model.embed_one(params.query), k=params.top_k,
+                            scope_thread_id=context.thread_id)
     return ToolResult(summary=f'{len(hits)} local memory hits', data={
         'hits': [{'text': text[:1500], 'thread_id': thread_id, 'distance': distance}
                  for text, thread_id, distance in hits]

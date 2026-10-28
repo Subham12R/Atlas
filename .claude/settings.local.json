@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "beui"
+  ],
+  "enableAllProjectMcpServers": true
+}

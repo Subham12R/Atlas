@@ -13,7 +13,7 @@ import {
   UserIcon,
   ArrowDown,
   HelpCircleIcon,
-  Logout01Icon
+  LockIcon
 } from '@hugeicons/core-free-icons'
 import { cn } from '@/lib/utils'
 import type { Chat } from './ChatArea'
@@ -57,6 +57,12 @@ export default function Sidebar({
   const [editingChatId, setEditingChatId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [showProfileMenu, setShowProfileMenu] = useState(false)
+  // Lock is only offered once the user has set an app password in Profile.
+  const [canLock, setCanLock] = useState(false)
+
+  useEffect(() => {
+    if (showProfileMenu) window.api.hasAppPassword().then(setCanLock, () => setCanLock(false))
+  }, [showProfileMenu])
   const [isPinnedExpanded, setIsPinnedExpanded] = useState(true)
   const [isRecentExpanded, setIsRecentExpanded] = useState(true)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
@@ -644,22 +650,26 @@ export default function Sidebar({
                 />
                 <span>Help</span>
               </button>
-              <div className="h-px bg-[#E5E3DF] dark:bg-[#2C2C2A] my-0.5" />
-              <button
-                onClick={async () => {
-                  setShowProfileMenu(false)
-                  await window.api.logoutUser()
-                  window.dispatchEvent(new Event('app:lock'))
-                }}
-                className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-[#FCEAE6] dark:hover:bg-[#441C1A] text-[#E0533C] dark:text-[#F87171] flex items-center gap-2.5 cursor-pointer font-semibold text-xs"
-              >
-                <HugeiconsIcon
-                  icon={Logout01Icon}
-                  size={13}
-                  className="text-[#E0533C] dark:text-[#F87171]"
-                />
-                <span>Logout</span>
-              </button>
+              {canLock && (
+                <>
+                  <div className="h-px bg-[#E5E3DF] dark:bg-[#2C2C2A] my-0.5" />
+                  <button
+                    onClick={() => {
+                      setShowProfileMenu(false)
+                      // Stay signed in; the lock screen only asks for the app password.
+                      window.dispatchEvent(new Event('app:lock'))
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-[#F1EFEA] dark:hover:bg-[#2C2C2A] text-[#2E2E2D] dark:text-[#EAE8E3] flex items-center gap-2.5 cursor-pointer font-medium text-xs"
+                  >
+                    <HugeiconsIcon
+                      icon={LockIcon}
+                      size={13}
+                      className="text-[#6E6D6A] dark:text-[#9E9D9A]"
+                    />
+                    <span>Lock Atlas</span>
+                  </button>
+                </>
+              )}
             </div>
           </>
         )}

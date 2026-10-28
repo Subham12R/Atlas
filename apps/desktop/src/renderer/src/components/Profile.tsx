@@ -32,6 +32,7 @@ import {
   setSearchSettings,
   setVoiceSettings,
   testProviderConnection,
+  type ProviderSettings,
   type ProviderSettingsMap
 } from '@/lib/api'
 
@@ -150,6 +151,147 @@ export function LocalRuntimeControl(): React.JSX.Element {
       >
         {label}
       </RichButton>
+    </div>
+  )
+}
+
+/** Any hosted OpenAI-compatible API (Together, Groq, DeepSeek, Fireworks, a gateway,
+ * or a model server on another machine). Shown in the model picker as a cloud model. */
+export function CustomEndpointSettings({
+  settings,
+  onChanged
+}: {
+  settings: ProviderSettings | undefined
+  onChanged: () => void
+}): React.JSX.Element {
+  const [baseUrl, setBaseUrl] = useState('')
+  const [model, setModel] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [busy, setBusy] = useState<'save' | 'test' | 'remove' | null>(null)
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const configured = !!settings?.configured
+
+  useEffect(() => {
+    setBaseUrl(settings?.base_url || '')
+    setModel(settings?.model || '')
+  }, [settings?.base_url, settings?.model])
+
+  const run = async (kind: 'save' | 'test' | 'remove', action: () => Promise<string>): Promise<void> => {
+    setBusy(kind)
+    setResult(null)
+    try {
+      setResult({ ok: true, message: await action() })
+    } catch (err) {
+      setResult({ ok: false, message: friendlyErrorMessage(err, 'Could not reach that endpoint.') })
+    } finally {
+      setBusy(null)
+      onChanged()
+    }
+  }
+
+  const save = (): Promise<void> =>
+    run('save', async () => {
+      await setProviderSettings('custom', {
+        base_url: baseUrl.trim(),
+        model: model.trim(),
+        ...(apiKey.trim() ? { api_key: apiKey.trim() } : {})
+      })
+      setApiKey('')
+      return 'Saved. It now appears in the model picker.'
+    })
+
+  const inputClass =
+    'flex-1 min-w-0 h-9 rounded-lg px-3 bg-[#F1EFEA] dark:bg-[#2C2C2A] text-sm text-[#2E2E2D] dark:text-[#EAE8E3] outline-none placeholder:text-[#9E9D9A]'
+
+  return (
+    <div className="space-y-2 w-full">
+      <h3 className="text-xs font-semibold text-[#2E2E2D] dark:text-[#EAE8E3]">
+        Custom cloud endpoint
+      </h3>
+      <p className="text-[11px] text-[#6E6D6A] dark:text-[#9E9D9A] leading-relaxed">
+        Use any hosted OpenAI-compatible API, such as Together, Groq, DeepSeek, Fireworks or
+        Mistral. Enter its base URL (usually ending in{' '}
+        <code className="px-1 py-0.5 bg-[#F1EFEA] dark:bg-[#2C2C2A] rounded text-[10px]">/v1</code>
+        ), the model ID, and your key. Chats with it are sent to that provider.
+      </p>
+      <div className="flex flex-col sm:flex-row gap-2 w-full">
+        <input
+          aria-label="Custom endpoint base URL"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder="https://api.together.xyz/v1"
+          className={inputClass}
+        />
+        <input
+          aria-label="Custom endpoint model"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          placeholder="Model ID, e.g. meta-llama/Llama-3.3-70B-Instruct-Turbo"
+          className={inputClass}
+        />
+      </div>
+      <div className="flex items-center gap-2 w-full">
+        <input
+          type="password"
+          aria-label="Custom endpoint API key"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={
+            settings?.api_key_configured ? 'API key saved - enter a new one to replace it' : 'API key'
+          }
+          className={inputClass}
+        />
+        <RichButton
+          onClick={() => void save()}
+          disabled={busy !== null || !baseUrl.trim() || !model.trim()}
+          className="h-9 shrink-0 px-3 text-xs font-semibold"
+        >
+          {busy === 'save' ? 'Saving...' : 'Save'}
+        </RichButton>
+      </div>
+      {configured && (
+        <div className="flex items-center gap-2 pt-1">
+          <RichButton
+            color="soft"
+            onClick={() =>
+              void run('test', async () => {
+                await testProviderConnection('custom')
+                return 'Connected.'
+              })
+            }
+            disabled={busy !== null}
+            className="h-9 px-4 text-xs font-semibold"
+          >
+            {busy === 'test' ? 'Testing...' : 'Test connection'}
+          </RichButton>
+          <RichButton
+            color="red"
+            onClick={() =>
+              void run('remove', async () => {
+                await deleteProviderSettings('custom')
+                setBaseUrl('')
+                setModel('')
+                return 'Removed.'
+              })
+            }
+            disabled={busy !== null}
+            className="h-9 px-3 text-xs font-semibold"
+          >
+            {busy === 'remove' ? 'Removing...' : 'Disconnect'}
+          </RichButton>
+        </div>
+      )}
+      {result && (
+        <p
+          role={result.ok ? 'status' : 'alert'}
+          className={cn(
+            'text-[11px] font-medium',
+            result.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-[#E0533C] dark:text-[#F87171]'
+          )}
+        >
+          {result.message}
+        </p>
+      )}
     </div>
   )
 }
@@ -742,8 +884,8 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
             </div>
             <p className="text-xs text-[#6E6D6A] dark:text-[#9E9D9A] leading-relaxed">
               {hasPassword
-                ? 'A password is required to open this app. Your connected accounts’ session cookies are stored locally, so this is worth keeping on.'
-                : 'Set a password to require it whenever this app is opened -- worth doing since your connected accounts’ session cookies are stored locally on this machine.'}
+                ? 'A password is required to open this app. Your chats and API keys are stored on this Mac, so this is worth keeping on.'
+                : 'Optional. Set a password to require it whenever Atlas opens. Your chats and API keys are stored on this Mac.'}
             </p>
 
             <form onSubmit={handleSetPassword} className="space-y-2 max-w-xs">
@@ -1018,6 +1160,11 @@ export default function Profile({ onClose }: ProfileProps): React.JSX.Element {
                     )
                   })}
                 </div>
+
+                <CustomEndpointSettings
+                  settings={providerSettings.custom}
+                  onChanged={refreshProviderSettings}
+                />
 
                 <div className="space-y-2 w-full">
                   <h3 className="text-xs font-semibold text-[#2E2E2D] dark:text-[#EAE8E3]">

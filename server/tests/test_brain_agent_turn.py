@@ -30,7 +30,10 @@ class BrainTurnTests(unittest.IsolatedAsyncioTestCase):
         self.adapter = FakeAdapter()
         self.brain = Brain(self.adapter, FakeStore(), object(), 'thread', 'fake', auto_summary=False)
         self.stored = []
-        self.brain._store_turn = lambda role, content, meta=None: self.stored.append((role, content))
+
+        async def persist(role, content, meta=None, recallable=True):
+            self.stored.append((role, content))
+        self.brain._persist_turn = persist
 
     async def test_preparation_once_final_only_once(self):
         with patch('brain.brain.build_context', return_value=('memory', {'hits': []})) as recall:
@@ -64,9 +67,12 @@ class BrainTurnTests(unittest.IsolatedAsyncioTestCase):
             await run_selected(AgentTurnRequest(prompt='real question', mode='tools'),
                                self.brain, 'openai', 'gpt-4o', lambda event: None,
                                asyncio.Event())
-        recall.assert_called_once_with(self.brain.store, self.brain.embedder, 'real question',
+        recall.assert_called_once_with(self.brain.store, None, 'real question',
                                        'thread', self.brain.topk, self.brain.budget,
-                                       self.brain.max_distance)
+                                       self.brain.max_distance, documents=None,
+                                       doc_k=self.brain.doc_k, doc_budget=self.brain.doc_budget,
+                                       doc_max_distance=self.brain.doc_max_distance,
+                                       entity_distance=self.brain.entity_distance)
         self.assertEqual(self.stored, [('user', 'real question'), ('assistant', 'answer')])
 
     async def test_normal_send_and_stream_use_same_boundary(self):

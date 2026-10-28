@@ -26,7 +26,7 @@ import json
 import logging
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -48,11 +48,13 @@ from tools.registry import ToolDenied, ToolNotFound
 from agents.runner import run_selected
 from factory import (ANON_OK, BRAIN_ENABLED, BRAIN_TOPK, IMAGE_GEN_MODELS,
                      IMAGE_GEN_PROVIDERS, MODELS, PROVIDERS, AuthMissing,
-                     build_adapter, build_brain, get_embedder, get_store)
+                     build_adapter, build_brain, embedder_status, get_embedder, get_store,
+                     start_embedder)
 from policy import ExecutionMode, ExecutionPolicy, ModelCandidate
 from routing import is_loopback_endpoint
 from auto_route import route_turn as auto_route_turn
 from reasoning import ReasoningLevel
+from brain.backfill import backfill_forever
 from brain.documents import Documents
 
 TAVILY_KEY = "TAVILY_API_KEY"
@@ -73,9 +75,19 @@ PROVIDER_ENV_KEYS = {
 }
 
 
+# Woken when new text needs vectors (a document was indexed, a turn stored unembedded).
+EMBED_WAKE = asyncio.Event()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    backfill = None
+    if BRAIN_ENABLED and os.getenv("ATLAS_LOAD_EMBEDDINGS", "1") != "0":
+        start_embedder()
+        backfill = asyncio.create_task(backfill_forever(get_store, get_embedder, EMBED_WAKE))
     yield
+    if backfill is not None:
+        backfill.cancel()
     for adapter, _ in SESSIONS.values():
         try:
             await adapter.close()
@@ -114,7 +126,7 @@ app.add_middleware(
 
 class ModelPreference(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    provider: Literal['local', 'openai', 'anthropic', 'gemini', 'openrouter']
+    provider: Literal['local', 'openai', 'anthropic', 'gemini', 'openrouter', 'custom']
     model: str = Field(max_length=200)
 
 
@@ -132,7 +144,7 @@ class TurnRouteRequest(BaseModel):
     follows_search: bool = False
 
 
-_CLOUD_ORDER = ('openai', 'anthropic', 'gemini', 'openrouter')  # Stable; no quality/price claims.
+_CLOUD_ORDER = ('openai', 'anthropic', 'gemini', 'openrouter', 'custom')  # Stable; no quality/price claims.
 _TOOL_CAPABILITIES = {'openai': OpenAIAdapter.capabilities, 'anthropic': AnthropicAdapter.capabilities,
                       'gemini': GeminiAdapter.capabilities}
 
@@ -145,7 +157,19 @@ def _candidate(provider: str, model: str, is_local: bool) -> ModelCandidate:
     return ModelCandidate(provider, model, frozenset(capabilities), is_local)
 
 
+def _custom_configured() -> bool:
+    return bool(credentials_store.get_value('CUSTOM_BASE_URL') and credentials_store.get_value('CUSTOM_MODEL'))
+
+
+def _cloud_configured(provider: str) -> bool:
+    if provider == 'custom':
+        return _custom_configured()
+    return bool(credentials_store.get_value(PROVIDER_ENV_KEYS[provider]))
+
+
 def _cloud_default(provider: str) -> str:
+    if provider == 'custom':
+        return credentials_store.get_value('CUSTOM_MODEL')
     if provider == 'openrouter':
         return credentials_store.get_value('OPENROUTER_MODEL') or OPENROUTER_DEFAULT_MODEL
     return {'openai': OPENAI_DEFAULT_MODEL, 'anthropic': ANTHROPIC_DEFAULT_MODEL,
@@ -169,7 +193,7 @@ async def route_turn(body: TurnRouteRequest):
     cloud = ([preference[0]] if cloud_preference else
              _CLOUD_ORDER if body.allow_cloud and not preference else ())
     candidates += [_candidate(provider, _cloud_default(provider), False) for provider in cloud
-                   if credentials_store.get_value(PROVIDER_ENV_KEYS[provider])]
+                   if _cloud_configured(provider)]
     return auto_route_turn(body.prompt, body.mode, body.agent_mode, candidates,
                            ExecutionPolicy(allow_cloud=cloud_preference or body.allow_cloud),
                            preference, body.reasoning,
@@ -410,6 +434,14 @@ async def get_provider_settings():
                 "api_key_configured": bool(credentials_store.get_value("LOCAL_LLM_API_KEY")),
             }
             continue
+        if p == "custom":
+            out[p] = {
+                "configured": _custom_configured(),
+                "base_url": credentials_store.get_value("CUSTOM_BASE_URL") or None,
+                "model": credentials_store.get_value("CUSTOM_MODEL") or None,
+                "api_key_configured": bool(credentials_store.get_value("CUSTOM_API_KEY")),
+            }
+            continue
         key = credentials_store.get_value(PROVIDER_ENV_KEYS[p])
         if p == "openrouter":
             out[p] = {
@@ -455,6 +487,23 @@ async def set_provider_settings(provider: str, body: ProviderSettingsUpdate):
             credentials_store.set_many(updates)
         return {"ok": True}
 
+    if provider == "custom":
+        updates = {}
+        if body.base_url is not None:
+            base_url = body.base_url.strip().rstrip("/")
+            # Never send a key in clear text to another machine.
+            if base_url and not (base_url.startswith("https://") or is_loopback_endpoint(base_url)):
+                raise HTTPException(400, "base_url must start with https:// "
+                                         "(http:// is allowed only for this computer)")
+            updates["CUSTOM_BASE_URL"] = base_url
+        if body.model is not None:
+            updates["CUSTOM_MODEL"] = body.model.strip()
+        if body.api_key:
+            updates["CUSTOM_API_KEY"] = body.api_key.strip()
+        if updates:
+            credentials_store.set_many(updates)
+        return {"ok": True}
+
     if provider == "openrouter":
         updates = {}
         if body.api_key:
@@ -474,6 +523,10 @@ async def set_provider_settings(provider: str, body: ProviderSettingsUpdate):
 @app.delete("/settings/providers/{provider}")
 async def clear_provider_settings(provider: str):
     """Disconnect a provider -- clears its saved API key."""
+    if provider == "custom":
+        for key in ("CUSTOM_BASE_URL", "CUSTOM_MODEL", "CUSTOM_API_KEY"):
+            credentials_store.delete(key)
+        return {"ok": True}
     if provider not in PROVIDER_ENV_KEYS:
         raise HTTPException(404, f"unknown or key-less provider {provider!r}")
     credentials_store.delete(PROVIDER_ENV_KEYS[provider])
@@ -829,30 +882,45 @@ async def close_session(sid: str):
     return {"ok": True}
 
 
+# Document endpoints are async on purpose: they share the brain's SQLite connection with
+# chat, so they must run on the event-loop thread rather than in FastAPI's thread pool.
 @app.post("/documents", status_code=201)
-def ingest_document(body: DocumentCreate):
+async def ingest_document(body: DocumentCreate):
     try:
         source_id = Documents(get_store().con).ingest_document(body.name, body.text)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    EMBED_WAKE.set()  # embed the new chunks now rather than at the next idle check
     return {"source_id": source_id}
 
 
 @app.get("/documents")
-def list_documents():
+async def list_documents():
     return Documents(get_store().con).list_documents()
 
 
 @app.get("/documents/search")
-def search_documents(q: str = Query(min_length=1, max_length=512),
-                     limit: int = Query(6, ge=1, le=20)):
+async def search_documents(q: str = Query(min_length=1, max_length=512),
+                           limit: int = Query(6, ge=1, le=20)):
     return Documents(get_store().con).search_documents(q, limit)
 
 
 @app.delete("/documents/{source_id}", status_code=204)
-def delete_document(source_id: str):
+async def delete_document(source_id: str):
     Documents(get_store().con).delete_document(source_id)
     return Response(status_code=204)
+
+
+@app.get("/memory/status")
+async def memory_status():
+    """Embedding model state and how much stored text still awaits vectors."""
+    status = embedder_status()
+    if BRAIN_ENABLED:
+        con = get_store().con
+        status["pending_document_chunks"] = con.execute(
+            "SELECT count(*) FROM document_chunks WHERE id NOT IN (SELECT rowid FROM vec_doc_chunks)"
+        ).fetchone()[0]
+    return status
 
 
 @app.get("/memory/search")
@@ -860,8 +928,11 @@ async def memory_search(q: str, k: int = BRAIN_TOPK):
     """Plain semantic search across ALL stored threads."""
     if not BRAIN_ENABLED:
         raise HTTPException(400, "brain is disabled (set BRAIN_ENABLED=1)")
-    store = get_store()
-    hits = store.search(get_embedder().embed_one(q), k=k)
+    store, model = get_store(), get_embedder()
+    if model is None:  # still loading: keyword matches only
+        return [{"text": t, "thread_id": tid, "distance": None}
+                for _, t, tid in store.keyword_search(q, k)]
+    hits = store.search(model.embed_one(q), k=k)
     return [{"text": t, "thread_id": tid, "distance": d} for t, tid, d in hits]
 
 
@@ -871,8 +942,9 @@ async def memory_search_graph(body: MemorySearch):
     the query AND surfaced in the recalled chunks."""
     if not BRAIN_ENABLED:
         raise HTTPException(400, "brain is disabled (set BRAIN_ENABLED=1)")
-    store = get_store()
-    hits = store.search(get_embedder().embed_one(body.q), k=body.k)
+    store, model = get_store(), get_embedder()
+    hits = (store.search(model.embed_one(body.q), k=body.k) if model is not None else
+            [(t, tid, None) for _, t, tid in store.keyword_search(body.q, body.k)])
     out = {"hits": [{"text": t, "thread_id": tid, "distance": d}
                     for t, tid, d in hits]}
     if body.graph:
@@ -899,6 +971,14 @@ async def thread_graph(tid: str):
     if not BRAIN_ENABLED:
         raise HTTPException(400, "brain is disabled (set BRAIN_ENABLED=1)")
     return get_store().graph(tid)
+
+
+@app.delete("/threads/{tid}", status_code=204)
+async def delete_thread(tid: str = Path(pattern=r'^[0-9a-f]{32}$')):
+    """Deleting a chat also deletes what memory learned from it."""
+    if BRAIN_ENABLED:
+        get_store().delete_thread(tid)
+    return Response(status_code=204)
 
 
 @app.get("/chats")

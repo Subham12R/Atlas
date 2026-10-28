@@ -11,10 +11,11 @@ export interface Profile {
 }
 
 export interface RegisterProfile {
-  email: string
   name: string
-  password: string
   avatarDataUrl: string | null
+  /** Optional: onboarding creates a name-only profile; app lock is set later in Profile. */
+  email?: string
+  password?: string
 }
 
 export interface Api {

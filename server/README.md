@@ -130,8 +130,9 @@ embedding model (~50 MB) once, then works offline.
 - **RAG-only mode:** set `BRAIN_AUTO_SUMMARY=0` to skip the LLM summary/graph
   step (no extra provider quota) while keeping vector recall.
 - **Off:** `BRAIN_ENABLED=0` reverts to plain adapters.
-- **Summarizer provider:** `BRAIN_SUMMARIZER=openai` (needs that provider's key
-  configured; degrades to RAG-only if it isn't).
+- **Summarizer provider:** empty by default = the chat's own cloud provider; local
+  chats stay RAG-only. Set `BRAIN_SUMMARIZER=<provider>` to force one (needs that
+  provider's key; degrades to RAG-only if it isn't configured).
 - All `BRAIN_*` knobs are documented in `.env.example`.
 
 Smoke-test it offline (no network/quota):

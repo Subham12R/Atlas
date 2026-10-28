@@ -2,7 +2,19 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
+
+from .hybrid import fts_query
+
+# Which chunk table each vector table embeds, and the title used when embedding it.
+_EMBED_SOURCES = {
+    "vec_chunks": ("SELECT c.id, c.text, NULL AS title FROM chunks c", "c.id"),
+    "vec_doc_chunks": ("SELECT c.id, c.text, d.name AS title FROM document_chunks c "
+                       "JOIN documents d ON d.source_id = c.source_id", "c.id"),
+    "vec_entities": ("SELECT e.id, e.name AS text, NULL AS title FROM entities e", "e.id"),
+    "vec_doc_entities": ("SELECT e.id, e.name AS text, NULL AS title FROM doc_entities e", "e.id"),
+}
 
 
 def _pack(vec: list[float]) -> bytes:
@@ -67,6 +79,60 @@ class MemoryStore:
         ).fetchall()
         return [(row["text"], row["thread_id"], 0.0) for row in reversed(rows)]
 
+    def keyword_search(self, query: str, k: int = 12,
+                       scope_thread_id: str | None = None) -> list[tuple]:
+        """BM25 keyword hits over chat memory -> [(chunk_id, text, thread_id), ...], best first."""
+        match = fts_query(query)
+        if not match:
+            return []
+        rows = self.con.execute(
+            """SELECT c.id, c.text, c.thread_id FROM chunks_fts f JOIN chunks c ON c.id = f.rowid
+               WHERE chunks_fts MATCH ? AND (? IS NULL OR c.thread_id = ?)
+               ORDER BY bm25(chunks_fts) LIMIT ?""",
+            (match, scope_thread_id, scope_thread_id, k)).fetchall()
+        return [(r["id"], r["text"], r["thread_id"]) for r in rows]
+
+    def dense_search(self, embedding: list[float], k: int = 12,
+                     max_distance: float | None = None) -> list[tuple]:
+        """Nearest chat chunks with ids -> [(chunk_id, text, thread_id, distance), ...]."""
+        rows = self.con.execute(
+            """WITH knn AS (SELECT rowid AS cid, distance FROM vec_chunks
+                             WHERE embedding MATCH ? ORDER BY distance LIMIT ?)
+               SELECT c.id, c.text, c.thread_id, knn.distance FROM knn JOIN chunks c ON c.id = knn.cid
+               ORDER BY knn.distance""", (_pack(embedding), k)).fetchall()
+        return [(r["id"], r["text"], r["thread_id"], r["distance"]) for r in rows
+                if max_distance is None or r["distance"] <= max_distance]
+
+    # ---- embedding backfill: rows stored before the model was ready (or after a model change)
+    def pending_embeddings(self, table: str, limit: int = 32) -> list[tuple]:
+        """Rows of `table`'s source that have no vector yet -> [(id, text, title), ...]."""
+        select, key = _EMBED_SOURCES[table]
+        rows = self.con.execute(
+            f"{select} WHERE {key} NOT IN (SELECT rowid FROM {table}) ORDER BY {key} LIMIT ?",
+            (limit,)).fetchall()
+        return [(r["id"], r["text"], r["title"]) for r in rows]
+
+    def store_embeddings(self, table: str, rows: list[tuple]) -> None:
+        if table not in _EMBED_SOURCES:
+            raise ValueError(table)
+        select, key = _EMBED_SOURCES[table]
+        with self.con:
+            for row_id, vector in rows:
+                # The source row may have been deleted while it was being embedded.
+                if self.con.execute(f"{select} WHERE {key} = ?", (row_id,)).fetchone():
+                    self.con.execute(f"INSERT OR REPLACE INTO {table}(rowid, embedding) VALUES (?,?)",
+                                     (row_id, _pack(vector)))
+
+    def similar_entities(self, embedding: list[float], k: int = 5,
+                         max_distance: float = 0.35) -> list[str]:
+        """Chat-graph entities whose names mean what the query is about."""
+        rows = self.con.execute(
+            """WITH knn AS (SELECT rowid AS eid, distance FROM vec_entities
+                             WHERE embedding MATCH ? ORDER BY distance LIMIT ?)
+               SELECT e.name, knn.distance FROM knn JOIN entities e ON e.id = knn.eid""",
+            (_pack(embedding), k)).fetchall()
+        return [r["name"] for r in rows if r["distance"] <= max_distance]
+
     def search(self, embedding: list[float], k: int = 6,
               max_distance: float | None = None,
               preferred_thread_id: str | None = None,
@@ -130,7 +196,9 @@ class MemoryStore:
         """Stored entity names that appear (case-insensitive) in `text`."""
         low = text.lower()
         rows = self.con.execute("SELECT DISTINCT name FROM entities").fetchall()
-        return [r["name"] for r in rows if r["name"].lower() in low]
+        # Whole-word matches only: an entity "AI" must not match inside "said".
+        return [r["name"] for r in rows
+                if re.search(rf"(?<!\w){re.escape(r['name'].lower())}(?!\w)", low)]
 
     def neighbors(self, names: list[str], limit: int = 20) -> list[tuple]:
         """1-hop edges touching any of `names` -> [(src, relation, dst), ...]."""
@@ -161,8 +229,33 @@ class MemoryStore:
         return {"nodes": [dict(n) for n in nodes],
                 "edges": [dict(e) for e in edges]}
 
+    def delete_thread(self, thread_id: str) -> None:
+        """Forget one conversation: its messages, recall vectors, summary and facts."""
+        orphaned = """SELECT id FROM entities WHERE thread_id=? AND id NOT IN (
+                          SELECT src_entity_id FROM edges WHERE thread_id != ?
+                          UNION SELECT dst_entity_id FROM edges WHERE thread_id != ?)"""
+        with self.con:
+            self.con.execute(f"DELETE FROM vec_entities WHERE rowid IN ({orphaned})",
+                             (thread_id, thread_id, thread_id))
+            self.con.execute(
+                "DELETE FROM vec_chunks WHERE rowid IN (SELECT id FROM chunks WHERE thread_id=?)",
+                (thread_id,))
+            self.con.execute("DELETE FROM chunks WHERE thread_id=?", (thread_id,))
+            self.con.execute("DELETE FROM messages WHERE thread_id=?", (thread_id,))
+            self.con.execute("DELETE FROM edges WHERE thread_id=?", (thread_id,))
+            # Entities can still be referenced by another thread's edges (edges key on
+            # entity ids, not threads); keep those, drop the rest.
+            self.con.execute(
+                """DELETE FROM entities WHERE thread_id=? AND id NOT IN (
+                       SELECT src_entity_id FROM edges UNION SELECT dst_entity_id FROM edges)""",
+                (thread_id,))
+            self.con.execute("DELETE FROM threads WHERE id=?", (thread_id,))
+
     def wipe_all(self) -> None:
         """Delete every row across all tables -- used by full account reset."""
+        for table in ("vec_doc_chunks", "vec_entities", "vec_doc_entities",
+                      "doc_entity_chunks", "doc_entity_edges", "doc_entities"):
+            self.con.execute(f"DELETE FROM {table}")
         self.con.execute("DELETE FROM document_chunks")
         self.con.execute("DELETE FROM documents")
         self.con.execute("DELETE FROM edges")

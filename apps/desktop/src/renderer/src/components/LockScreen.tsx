@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 
 interface LockScreenProps {
   onUnlock: () => void
@@ -12,6 +12,34 @@ export default function LockScreen({ onUnlock }: LockScreenProps): React.JSX.Ele
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
+  // A signed-in profile only needs its password; email login is for signed-out accounts.
+  const [signedInName, setSignedInName] = useState<string | null | undefined>(undefined)
+
+  useEffect(() => {
+    window.api.getProfile().then(
+      (profile) => setSignedInName(profile.name || null),
+      () => setSignedInName(null)
+    )
+  }, [])
+
+  const handleUnlock = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault()
+    if (!password) return
+    setError(null)
+    setChecking(true)
+    try {
+      if (await window.api.verifyAppPassword(password)) {
+        onUnlock()
+      } else {
+        setError('Incorrect password.')
+      }
+    } catch (err) {
+      console.error(err)
+      setError('Could not check the password.')
+    } finally {
+      setChecking(false)
+    }
+  }
 
   const handleLogin = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
@@ -69,6 +97,51 @@ export default function LockScreen({ onUnlock }: LockScreenProps): React.JSX.Ele
     } finally {
       setChecking(false)
     }
+  }
+
+  if (signedInName === undefined) return <div className="h-full w-full bg-[#FAF9F6] dark:bg-[#171717]" />
+
+  if (signedInName) {
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-[#FAF9F6] dark:bg-[#171717] select-none">
+        <form onSubmit={handleUnlock} className="w-full max-w-sm flex flex-col items-center gap-6 px-6">
+          <div className="text-center space-y-1">
+            <h1 className="text-2xl font-bold tracking-tight text-[#2E2E2D] dark:text-[#EAE8E3]">
+              Welcome back, {signedInName}
+            </h1>
+            <p className="text-xs text-[#6E6D6A] dark:text-[#9E9D9A]">
+              Enter your app password to open Atlas
+            </p>
+          </div>
+          <div className="w-full flex flex-col gap-3">
+            <input
+              autoFocus
+              type="password"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value)
+                setError(null)
+              }}
+              placeholder="Password"
+              aria-label="App password"
+              className="w-full h-10 rounded-xl px-3.5 bg-[#F1EFEA] dark:bg-[#2C2C2A] text-sm font-medium text-[#2E2E2D] dark:text-[#EAE8E3] outline-none focus:ring-1 focus:ring-[#6E6D6A] dark:focus:ring-[#9E9D9A] transition-all"
+            />
+            {error && (
+              <p role="alert" className="text-xs text-[#E0533C] dark:text-[#F87171] mt-1 font-semibold">
+                {error}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={checking || !password}
+              className="w-full h-10 mt-2 rounded-xl bg-[#2E2E2D] dark:bg-[#EAE8E3] text-white dark:text-[#1A1A19] text-sm font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {checking ? 'Unlocking...' : 'Unlock'}
+            </button>
+          </div>
+        </form>
+      </div>
+    )
   }
 
   return (

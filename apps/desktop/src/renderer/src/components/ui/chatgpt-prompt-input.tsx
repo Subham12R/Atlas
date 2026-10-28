@@ -3,10 +3,11 @@ import * as TooltipPrimitive from '@radix-ui/react-tooltip'
 import * as PopoverPrimitive from '@radix-ui/react-popover'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { Csv01Icon, File01Icon, SourceCodeIcon } from '@hugeicons/core-free-icons'
+import { Csv01Icon, File01Icon, Pdf01Icon, SourceCodeIcon } from '@hugeicons/core-free-icons'
 import { ApiError, friendlyErrorMessage, transcribeAudio, type DraftKind } from '@/lib/api'
 import { INTENT_OPTIONS, requestForIntent, type ChatIntent } from '@/lib/chat-intent'
 import { attachmentLimitError } from '@/lib/attachment-limits.mjs'
+import { MAX_PDF_BYTES, PdfTextError, extractPdfText, isPdf } from '@/lib/pdf-text'
 import type { ExecutionMode } from '@/lib/modes'
 
 // --- Utility Function & Radix Primitives ---
@@ -273,6 +274,7 @@ function isTextFile(file: File): boolean {
 export function fileIcon(name: string) {
   const lower = name.toLowerCase()
   if (lower.endsWith('.csv')) return Csv01Icon
+  if (lower.endsWith('.pdf')) return Pdf01Icon
   if (CODE_FILE_EXTENSIONS.some((ext) => lower.endsWith(ext))) return SourceCodeIcon
   return File01Icon
 }
@@ -308,6 +310,7 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
     const internalTextareaRef = React.useRef<HTMLTextAreaElement>(null)
     const fileInputRef = React.useRef<HTMLInputElement>(null)
     const pendingTextFiles = React.useRef<File[]>([])
+    const [readingPdfs, setReadingPdfs] = React.useState<string[]>([])
     const [value, setValue] = React.useState('')
     const [attachments, setAttachments] = React.useState<Attachment[]>([])
     const [internalIntent, setInternalIntent] = React.useState<ChatIntent>('auto')
@@ -437,14 +440,56 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(event.target.files || [])
-      const selected = files.filter((file) => !file.type.startsWith('image/') && isTextFile(file))
-      const error = attachmentLimitError(selected, [
-        ...attachments.filter((att): att is FileAttachment => att.kind === 'file'),
-        ...pendingTextFiles.current
-      ])
-      setFileError(error)
+      const pdfs = files.filter(isPdf)
+      const selected = files.filter((file) => !file.type.startsWith('image/') && !isPdf(file) && isTextFile(file))
+      // e.g. Word or Excel: say so instead of silently dropping the file.
+      const unsupported = files.filter(
+        (file) => !file.type.startsWith('image/') && !isPdf(file) && !isTextFile(file)
+      )
+      // A PDF counts toward the file limit; its size limit applies to the extracted text.
+      const error =
+        attachmentLimitError([...selected, ...pdfs.map((pdf) => new File([], pdf.name))], [
+          ...attachments.filter((att): att is FileAttachment => att.kind === 'file'),
+          ...pendingTextFiles.current
+        ]) ??
+        (pdfs.some((pdf) => pdf.size > MAX_PDF_BYTES) ? 'Each PDF must be at most 25 MiB.' : null)
+      setFileError(
+        error ??
+          (unsupported.length
+            ? `Can't attach ${unsupported.map((file) => file.name).join(', ')}. Atlas reads PDF, text, code and image files; Office files aren't supported yet.`
+            : null)
+      )
       event.target.value = ''
       if (error) return
+      for (const pdf of pdfs) {
+        // Zero-size placeholder: holds the file slot and blocks sending until the text is in.
+        const placeholder = new File([], pdf.name)
+        pendingTextFiles.current.push(placeholder)
+        setReadingPdfs((prev) => [...prev, pdf.name])
+        void pdf
+          .arrayBuffer()
+          .then(extractPdfText)
+          .then(({ text }) => {
+            const size = new Blob([text]).size
+            if (size > 5 * 1024 * 1024) {
+              setFileError(`${pdf.name} has more than 5 MiB of text; attach a shorter PDF.`)
+              return
+            }
+            setAttachments((prev) => [
+              ...prev,
+              { kind: 'file', id: crypto.randomUUID(), name: pdf.name, content: text, size }
+            ])
+          })
+          .catch((err) => {
+            setFileError(
+              `${pdf.name}: ${err instanceof PdfTextError ? err.message : 'could not read this PDF.'}`
+            )
+          })
+          .finally(() => {
+            pendingTextFiles.current = pendingTextFiles.current.filter((pending) => pending !== placeholder)
+            setReadingPdfs((prev) => prev.filter((_, index) => index !== prev.indexOf(pdf.name)))
+          })
+      }
       for (const file of files) {
         const id = crypto.randomUUID()
         if (file.type.startsWith('image/')) {
@@ -530,10 +575,15 @@ export const PromptBox = React.forwardRef<HTMLTextAreaElement, PromptBoxProps>(
           ref={fileInputRef}
           onChange={handleFileChange}
           className="hidden"
-          accept={`image/*,${TEXT_FILE_EXTENSIONS.join(',')}`}
+          accept={`image/*,.pdf,application/pdf,${TEXT_FILE_EXTENSIONS.join(',')}`}
         />
 
         {fileError && <p role="alert" className="px-2 text-xs text-red-600">{fileError}</p>}
+        {readingPdfs.length > 0 && (
+          <p role="status" className="px-2 text-xs text-muted-foreground">
+            Reading {readingPdfs.join(', ')}…
+          </p>
+        )}
         {attachments.length > 0 && (
           <div className="flex flex-wrap items-end gap-1.5 px-1 pt-1 mb-1">
             {attachments.map((att) =>

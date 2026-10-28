@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import Onboarding from './Onboarding'
 
@@ -7,13 +7,15 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-it('starts on a full-window Atlas intro and advances to the existing account flow', async () => {
+it('starts on a full-window Atlas intro and finishes with just a name, no account or password', async () => {
   vi.stubGlobal('matchMedia', () => ({
     matches: true,
     addEventListener: vi.fn(),
     removeEventListener: vi.fn()
   }))
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+  const registerUser = vi.fn(async () => true)
+  vi.stubGlobal('api', { registerUser })
   const { container } = render(<Onboarding onComplete={vi.fn()} />)
   expect(screen.getByRole('img', { name: 'Atlas' })).toBeTruthy()
   expect(container.querySelector('canvas')).toBeNull() // intro stays clear of the shader
@@ -29,8 +31,9 @@ it('starts on a full-window Atlas intro and advances to the existing account flo
   fireEvent.click(screen.getByRole('button', { name: 'Get started' }))
   const name = await screen.findByPlaceholderText('Your name')
   expect(container.querySelector('canvas')).not.toBeNull() // shader replaces the old blue glow
-  fireEvent.change(name, { target: { value: 'Alex' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
-  expect(await screen.findByPlaceholderText('Email address')).toBeTruthy()
-  expect(screen.getByPlaceholderText('Password')).toBeTruthy()
+  fireEvent.change(name, { target: { value: '  Alex ' } })
+  expect(screen.queryByPlaceholderText('Email address')).toBeNull()
+  expect(screen.queryByPlaceholderText('Password')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+  await waitFor(() => expect(registerUser).toHaveBeenCalledWith({ name: 'Alex', avatarDataUrl: null }))
 })

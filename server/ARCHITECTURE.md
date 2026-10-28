@@ -127,9 +127,12 @@ unbounded reaches `vec_chunks`.
 
 ### Summaries + graph (`brain/summarizer.py`)
 The only part that spends provider quota. Uses a dedicated adapter
-(`BRAIN_SUMMARIZER`, default `openai`), `new_chat()`-ed before each call so its
-context never accumulates. If that provider isn't configured, the brain
-degrades to **RAG-only** (no summary/graph) rather than failing.
+(`BRAIN_SUMMARIZER`; empty by default, meaning the chat's own cloud provider, so no
+additional provider sees the conversation), `new_chat()`-ed before each call so its
+context never accumulates. Local chats skip enrichment unless `BRAIN_SUMMARIZER` is
+set. Enrichment runs as a background task after the reply is delivered, serialized per
+session. If no summarizer is available, the brain degrades to **RAG-only** (no
+summary/graph) rather than failing.
 
 Config (all in `factory.py`, documented in `.env.example`): `BRAIN_ENABLED`,
 `BRAIN_DB_PATH`, `BRAIN_EMBED_MODEL`/`DIM`, `BRAIN_SUMMARIZER`,

@@ -23,6 +23,7 @@ import {
   ApiAborted,
   ApiError,
   closeSession,
+  deleteMemoryThread,
   createSession,
   friendlyErrorMessage,
   generateImage,
@@ -223,10 +224,16 @@ function Home(): React.JSX.Element {
 
   const handleDeleteChat = (id: string): void => {
     const chat = chats.find((c) => c.id === id)
-    if (chat?.sessionId) {
-      closeSession(chat.sessionId).catch(() => {
-        // session may already be gone (e.g. server restarted) -- nothing to do
-      })
+    // Close first so the session can't write to the thread being deleted.
+    const closed = chat?.sessionId
+      ? closeSession(chat.sessionId).catch(() => {
+          // session may already be gone (e.g. server restarted) -- nothing to do
+        })
+      : Promise.resolve()
+    const threadId = chat?.threadId
+    if (threadId) {
+      // A deleted chat must not keep resurfacing in other chats' recall.
+      void closed.then(() => deleteMemoryThread(threadId)).catch(() => {})
     }
     setChats((prev) => prev.filter((c) => c.id !== id))
     setComposerByChat((prev) => {

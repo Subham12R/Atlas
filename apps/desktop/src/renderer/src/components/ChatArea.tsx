@@ -186,6 +186,7 @@ const MODELS: ModelOption[] = [
   { id: 'anthropic', provider: 'anthropic', name: 'Anthropic', desc: 'Claude models via official API' },
   { id: 'gemini', provider: 'gemini', name: 'Gemini', desc: 'Google Gemini via official API' },
   { id: 'openrouter', provider: 'openrouter', name: 'OpenRouter', desc: 'Any model, routed through OpenRouter' },
+  { id: 'custom', provider: 'custom', name: 'Custom endpoint', desc: 'Your OpenAI-compatible cloud API' },
   { id: 'local', provider: 'local', name: 'Local model', desc: 'Ollama, LM Studio, vLLM, or another local server' }
 ]
 
@@ -240,7 +241,8 @@ function MemoryUsed({
         )}
         {memory.hits.map((hit, index) => (
           <ContextCard key={`${hit.thread_id}-${index}`} label="Past conversation"
-            meta={`${Math.round((1 - hit.distance) * 100)}% match`} onClick={openThread?.(hit.thread_id)}>
+            meta={hit.distance === null ? 'keyword match' : `${Math.round((1 - hit.distance) * 100)}% match`}
+            onClick={openThread?.(hit.thread_id)}>
             {hit.text}
           </ContextCard>
         ))}
@@ -550,6 +552,7 @@ export default function ChatArea({
   }, [])
 
   const activeModels = MODELS.filter((m) => providerSettings[m.provider]?.configured).flatMap((option) => {
+    if (option.provider === 'custom') return { ...option, name: providerSettings.custom?.model || option.name }
     if (option.provider !== 'local') return option
     const runtime = providerSettings.local?.runtime || 'local'
     const chatModels = localModels.filter(
@@ -781,7 +784,8 @@ export default function ChatArea({
       let lastIndex = 0
 
       // Match bold, code, or a server-issued source citation.
-      const regex = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([SA]\d+(?:,\s*[SA]\d+)*)\])/g
+      // S = web source, A = attached file, D = indexed-document passage.
+      const regex = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([SAD]\d+(?:,\s*[SAD]\d+)*)\])/g
       let match
 
       let index = 0
@@ -1038,8 +1042,21 @@ export default function ChatArea({
   ): React.JSX.Element => {
     const citedSources = message.sources?.filter((source) =>
       /^https?:\/\//i.test(source.url) && (!source.source_id ||
-        new RegExp(`\\[(?:[SA]\\d+,\\s*)*${source.source_id}(?:,|\\])`).test(message.content))
+        new RegExp(`\\[(?:[SAD]\\d+,\\s*)*${source.source_id}(?:,|\\])`).test(message.content))
     )
+    // Chat answers get document passages through memory recall; agent runs report them as
+    // evidence. Either way they are cited [D#] and labelled with file and page.
+    const documentEvidence = [
+      ...(message.attachmentSources?.filter((item) => item.source_id.startsWith('D')) ?? []),
+      ...(message.memory?.documents?.map((doc) => ({
+        source_id: doc.source_id,
+        filename: doc.name,
+        section: doc.page ? `page ${doc.page}` : 'indexed document'
+      })) ?? [])
+    ].filter((item, index, all) => all.findIndex((other) => other.source_id === item.source_id) === index)
+    const citedDocuments = documentEvidence.filter((item) =>
+      new RegExp(`\\[(?:[SAD]\\d+,\\s*)*${item.source_id}(?:,|\\])`).test(message.content))
+    const fileEvidence = message.attachmentSources?.filter((item) => item.source_id.startsWith('A'))
     return (
     <>
       <div data-reply className="selectable-text prose prose-neutral dark:prose-invert max-w-none text-[#2E2E2D] dark:text-[#EAE8E3]">
@@ -1048,14 +1065,25 @@ export default function ChatArea({
           animate={!!message.isNew}
           isStreaming={isStreaming}
           onDone={() => onMessageRevealed(message.id)}
-          render={(text) => parseMarkdownContent(text, isStreaming, message.sources, message.attachmentSources)}
+          render={(text) => parseMarkdownContent(text, isStreaming, message.sources,
+            [...(fileEvidence ?? []), ...documentEvidence])}
         />
       </div>
-      {message.attachmentSources?.length ? (
+      {fileEvidence?.length ? (
         <div className="my-2 text-xs text-muted-foreground">
-          Attached-file evidence: {message.attachmentSources.map((item) =>
+          Attached-file evidence: {fileEvidence.map((item) =>
             `${item.source_id} ${item.filename} (${item.section})`
           ).join(' · ')}
+        </div>
+      ) : null}
+      {!isStreaming && citedDocuments.length ? (
+        <div aria-label="Cited documents" className="my-2 flex flex-wrap gap-1.5">
+          {citedDocuments.map((item) => (
+            <span key={item.source_id} title={`${item.filename}, ${item.section}`}
+              className="max-w-56 truncate rounded-full border border-[#E5E3DF] px-2 py-0.5 text-[11px] text-[#6E6D6A] dark:border-[#2C2C2A] dark:text-[#9E9D9A]">
+              {item.source_id} · {item.filename}{item.section.startsWith('page') ? ` · p. ${item.section.slice(5)}` : ''}
+            </span>
+          ))}
         </div>
       ) : null}
       {!isStreaming && citedSources?.length ? (
